@@ -10,6 +10,9 @@ const __dirname = path.dirname(__filename);
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Relative assets keep the build portable for both project Pages and
+  // user/organisation Pages URLs.
+  base: './',
   plugins: [react(), tailwindcss(), viteSingleFile()],
   resolve: {
     alias: {
