@@ -1,0 +1,19 @@
+{
+  "name": "HRIS Lite Enterprise",
+  "short_name": "HRIS Lite",
+  "description": "Sistem Manajemen SDM dan akses karyawan.",
+  "lang": "id",
+  "start_url": "./#/login",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#0D47A1",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
