@@ -651,7 +651,25 @@ export async function checkIn(payload: {
     const lateMinutes = Math.max(0, currentMinutes - workStartMinutes);
     const status = lateMinutes > 0 ? 'Late' : 'Present';
 
-    // GEOFENCING VALIDATION - HARUS DALAM RADIUS KANTOR
+    // 1. CEK APAKAH WAJAH SUDAH TERDAFTAR
+    const employee = db.getEmployeeById(session.employeeId);
+    if (!employee?.faceRegistered || !employee?.faceDescriptor) {
+      return fail(
+        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID sebelum melakukan absensi.'
+      ) as ApiResponse<Attendance>;
+    }
+
+    // 2. VERIFIKASI WAJAH DENGAN DATABASE
+    if (payload.photo) {
+      const faceRes = await verifyAttendanceFace(payload.photo);
+      if (!faceRes.success || !faceRes.data?.match) {
+        return fail(
+          faceRes.message || 'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar.'
+        ) as ApiResponse<Attendance>;
+      }
+    }
+
+    // 3. GEOFENCING VALIDATION - HARUS DALAM RADIUS KANTOR
     if (payload.lat != null && payload.lng != null) {
       const dist = haversineDistance(payload.lat, payload.lng, settings.officeLat, settings.officeLng);
       if (dist > settings.officeRadiusMeters) {
@@ -702,7 +720,25 @@ export async function checkOut(payload: {
     if (idx < 0 || !list[idx].checkIn) return fail('Anda belum check-in hari ini') as ApiResponse<Attendance>;
     if (list[idx].checkOut) return fail('Anda sudah check-out hari ini') as ApiResponse<Attendance>;
 
-    // GEOFENCING VALIDATION untuk Check Out
+    // 1. CEK APAKAH WAJAH SUDAH TERDAFTAR
+    const employee = db.getEmployeeById(session.employeeId);
+    if (!employee?.faceRegistered || !employee?.faceDescriptor) {
+      return fail(
+        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.'
+      ) as ApiResponse<Attendance>;
+    }
+
+    // 2. VERIFIKASI WAJAH DENGAN DATABASE
+    if (payload.photo) {
+      const faceRes = await verifyAttendanceFace(payload.photo);
+      if (!faceRes.success || !faceRes.data?.match) {
+        return fail(
+          faceRes.message || 'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar.'
+        ) as ApiResponse<Attendance>;
+      }
+    }
+
+    // 3. GEOFENCING VALIDATION untuk Check Out
     if (payload.lat != null && payload.lng != null) {
       const settings = db.getSettings();
       const dist = haversineDistance(payload.lat, payload.lng, settings.officeLat, settings.officeLng);
@@ -1276,10 +1312,11 @@ export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{
   const { verifyFaceFromBase64 } = await import('./faceRecognition');
   const result = await verifyFaceFromBase64(photo, enrolledDescriptor);
   
-  return ok<{ match: boolean; similarity: number }>({
+  const faceResult: { match: boolean; similarity: number } = {
     match: result.matched,
     similarity: result.similarity,
-  }, result.message);
+  };
+  return ok(faceResult, result.message);
 }
 
 export async function getFaceEnrollmentStatus(): Promise<ApiResponse<{ enrolled: boolean; employeeName?: string }>> {

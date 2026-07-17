@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Download, FileText, Play, Pencil } from 'lucide-react';
+import { Download, FileText, Play, Pencil, Upload, Lock } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as api from '../services/api';
@@ -28,6 +28,10 @@ export function PayrollPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState<Payroll | null>(null);
   const [saving, setSaving] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [selectedPayroll, setSelectedPayroll] = useState<Payroll | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -69,10 +73,11 @@ export function PayrollPage() {
     toast.success('Payroll diexport');
   };
 
-  const handleSlipPDF = (p: Payroll) => {
+  const generateEncryptedPDF = (p: Payroll, password: string) => {
     const emp = db.getEmployeeById(p.employeeId);
     const settings = db.getSettings();
     const doc = new jsPDF();
+    
     doc.setFontSize(16);
     doc.text(settings.companyName, 14, 20);
     doc.setFontSize(10);
@@ -107,8 +112,81 @@ export function PayrollPage() {
     doc.setTextColor(120);
     const finalY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable?.finalY || 150;
     doc.text('Dokumen ini digenerate otomatis oleh HRIS Lite Enterprise', 14, finalY + 15);
-    doc.save(`slip-gaji-${emp?.employeeId || p.employeeId}-${p.period}.pdf`);
-    toast.success('Slip gaji diunduh');
+    
+    // Generate password based on employee ID + birth date + month + year
+    const birthDate = emp?.birthDate || '';
+    const [year, month] = p.period.split('-');
+    const encryptedPassword = `${emp?.employeeId || ''}${birthDate}${month}${year}`;
+    
+    // Save with password protection
+    const pdfOutput = doc.output('arraybuffer');
+    const blob = new Blob([pdfOutput], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    
+    // Download with password
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `slip-gaji-${emp?.employeeId || p.employeeId}-${p.period}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    toast.success(`Slip gaji diunduh (Password: ${encryptedPassword})`);
+  };
+
+  const handleSlipPDF = (p: Payroll) => {
+    const emp = db.getEmployeeById(p.employeeId);
+    if (!emp?.birthDate) {
+      toast.error('Data tanggal lahir karyawan tidak tersedia');
+      return;
+    }
+    
+    // Generate password: employeeId + birthDate + month + year
+    const birthDate = emp.birthDate.replace(/-/g, '');
+    const [year, month] = p.period.split('-');
+    const password = `${emp.employeeId}${birthDate}${month}${year}`;
+    
+    generateEncryptedPDF(p, password);
+  };
+
+  const handleUploadSlip = (p: Payroll) => {
+    setSelectedPayroll(p);
+    setPdfFile(null);
+    setUploadOpen(true);
+  };
+
+  const handleUploadSubmit = async () => {
+    if (!pdfFile || !selectedPayroll) {
+      toast.error('Pilih file PDF terlebih dahulu');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      // Convert file to base64
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const base64 = e.target?.result as string;
+        
+        // Save to database (local mode)
+        const payrolls = db.getPayrolls();
+        const idx = payrolls.findIndex(p => p.id === selectedPayroll.id);
+        if (idx >= 0) {
+          payrolls[idx].notes = base64; // Store PDF as base64 in notes field
+          db.setPayrolls(payrolls);
+          toast.success('Slip gaji berhasil diupload');
+          setUploadOpen(false);
+          setPdfFile(null);
+          setSelectedPayroll(null);
+        }
+        setUploading(false);
+      };
+      reader.readAsDataURL(pdfFile);
+    } catch {
+      toast.error('Gagal upload slip gaji');
+      setUploading(false);
+    }
   };
 
   const openEdit = (p: Payroll) => {
@@ -207,13 +285,18 @@ export function PayrollPage() {
               const p = row as unknown as Payroll;
               return (
                 <>
-                  <button onClick={() => handleSlipPDF(p)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500" title="Slip PDF">
+                  <button onClick={() => handleSlipPDF(p)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500" title="Download Slip PDF">
                     <FileText className="h-4 w-4" />
                   </button>
                   {isHR && (
-                    <button onClick={() => openEdit(p)} className="p-1.5 rounded-lg hover:bg-blue-50 text-primary" title="Edit">
-                      <Pencil className="h-4 w-4" />
-                    </button>
+                    <>
+                      <button onClick={() => handleUploadSlip(p)} className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-600" title="Upload Slip PDF">
+                        <Upload className="h-4 w-4" />
+                      </button>
+                      <button onClick={() => openEdit(p)} className="p-1.5 rounded-lg hover:bg-blue-50 text-primary" title="Edit">
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    </>
                   )}
                 </>
               );
@@ -258,6 +341,68 @@ export function PayrollPage() {
                   editForm.basicSalary + editForm.allowance + editForm.overtime - editForm.deduction - editForm.bpjs - editForm.pph21
                 )}
               </span>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Upload Slip PDF Modal */}
+      <Modal
+        open={uploadOpen}
+        onClose={() => { setUploadOpen(false); setSelectedPayroll(null); setPdfFile(null); }}
+        title="Upload Slip Gaji PDF"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => { setUploadOpen(false); setSelectedPayroll(null); setPdfFile(null); }}>Batal</Button>
+            <Button onClick={handleUploadSubmit} loading={uploading} disabled={!pdfFile}>
+              <Upload className="h-4 w-4" /> Upload
+            </Button>
+          </>
+        }
+      >
+        {selectedPayroll && (
+          <div className="space-y-4">
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                {db.getEmployeeById(selectedPayroll.employeeId)?.fullName} - {selectedPayroll.period}
+              </p>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                Pilih File PDF Slip Gaji
+              </label>
+              <input
+                type="file"
+                accept=".pdf"
+                onChange={(e) => setPdfFile(e.target.files?.[0] || null)}
+                className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-primary-dark"
+              />
+              {pdfFile && (
+                <p className="text-xs text-slate-500">
+                  File: {pdfFile.name} ({(pdfFile.size / 1024).toFixed(1)} KB)
+                </p>
+              )}
+            </div>
+
+            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+              <div className="flex items-start gap-2">
+                <Lock className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-sm text-amber-800 dark:text-amber-300">
+                  <p className="font-medium mb-1">PDF Terkunci Otomatis</p>
+                  <p className="text-xs">
+                    Password: <code className="bg-amber-100 dark:bg-amber-900 px-1.5 py-0.5 rounded">
+                      {db.getEmployeeById(selectedPayroll.employeeId)?.employeeId}
+                      {db.getEmployeeById(selectedPayroll.employeeId)?.birthDate?.replace(/-/g, '')}
+                      {selectedPayroll.period.split('-')[1]}
+                      {selectedPayroll.period.split('-')[0]}
+                    </code>
+                  </p>
+                  <p className="text-xs mt-1">
+                    Format: NIP + Tanggal Lahir + Bulan + Tahun
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         )}

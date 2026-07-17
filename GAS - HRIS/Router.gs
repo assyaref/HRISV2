@@ -181,6 +181,31 @@ function handleRequest(e, method) {
         result = ReportService.saveSettings(params, session);
         break;
 
+      // User Management
+      case 'getUsers':
+        result = UserService.list(params);
+        break;
+      case 'saveUser':
+        result = UserService.save(params, session);
+        break;
+      case 'deleteUser':
+        result = UserService.delete(params.id, session);
+        break;
+      case 'resetUserPassword':
+        result = UserService.resetPassword(params, session);
+        break;
+
+      // Face Recognition
+      case 'enrollFace':
+        result = UserService.enrollFace(params, session);
+        break;
+      case 'getFaceEnrollmentStatus':
+        result = UserService.getFaceStatus(params, session);
+        break;
+      case 'verifyAttendanceFace':
+        result = UserService.verifyFace(params, session);
+        break;
+
       // Upload
       case 'uploadPhoto':
         result = UploadService.uploadPhoto(params.base64, params.filename, params.mimeType);
@@ -231,7 +256,7 @@ function getClientIp(e) {
  */
 function initAllSheets() {
   var headers = {
-    EMPLOYEE: ['id', 'employeeId', 'nik', 'fullName', 'gender', 'birthDate', 'religion', 'address', 'phone', 'email', 'departmentId', 'divisionId', 'positionId', 'joinDate', 'employmentStatus', 'salary', 'photo', 'managerId', 'createdAt', 'updatedAt'],
+    EMPLOYEE: ['id', 'employeeId', 'nik', 'fullName', 'gender', 'birthDate', 'religion', 'address', 'phone', 'email', 'departmentId', 'divisionId', 'positionId', 'joinDate', 'employmentStatus', 'salary', 'photo', 'managerId', 'faceDescriptor', 'faceRegistered', 'createdAt', 'updatedAt'],
     ATTENDANCE: ['id', 'employeeId', 'date', 'checkIn', 'checkOut', 'checkInLat', 'checkInLng', 'checkOutLat', 'checkOutLng', 'checkInPhoto', 'checkOutPhoto', 'status', 'workHours', 'lateMinutes', 'notes', 'createdAt'],
     LEAVE: ['id', 'employeeId', 'leaveType', 'startDate', 'endDate', 'days', 'reason', 'status', 'managerNote', 'hrNote', 'approvedByManager', 'approvedByHR', 'createdAt', 'updatedAt'],
     PERMISSION: ['id', 'employeeId', 'type', 'date', 'startTime', 'endTime', 'reason', 'status', 'approvedBy', 'note', 'createdAt'],
