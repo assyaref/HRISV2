@@ -42,6 +42,8 @@ export interface Employee {
   photo?: string;
   qrCode?: string;
   managerId?: string;
+  faceDescriptor?: string; // JSON string dari Float32Array untuk face recognition
+  faceRegistered?: boolean; // Status registrasi wajah
   createdAt: string;
   updatedAt: string;
 }

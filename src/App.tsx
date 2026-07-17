@@ -7,6 +7,7 @@ import { AppLayout } from './components/layout/AppLayout';
 import { LoadingScreen } from './components/ui/LoadingScreen';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { EmployeeDashboard } from './pages/EmployeeDashboard';
 import { EmployeePage } from './pages/EmployeePage';
 import { AttendancePage } from './pages/AttendancePage';
 import { LeavePage } from './pages/LeavePage';
@@ -14,9 +15,11 @@ import { PermissionPage } from './pages/PermissionPage';
 import { PayrollPage } from './pages/PayrollPage';
 import { MasterDataPage } from './pages/MasterDataPage';
 import { AnnouncementPage } from './pages/AnnouncementPage';
+import { AccessPage } from './pages/AccessPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ReportPage } from './pages/ReportPage';
+import { FaceEnrollmentPage } from './pages/FaceEnrollmentPage';
 import type { Role } from './types';
 
 function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: Role[] }) {
@@ -53,7 +56,9 @@ function AppRoutes() {
         }
       >
         <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardPage />} />
+        <Route path="dashboard" element={
+          session?.role === 'Employee' ? <EmployeeDashboard /> : <DashboardPage />
+        } />
         <Route
           path="employees"
           element={
@@ -90,6 +95,8 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+        <Route path="access" element={<AccessPage />} />
+        <Route path="face-enrollment" element={<FaceEnrollmentPage />} />
         <Route path="announcements" element={<AnnouncementPage />} />
         <Route
           path="reports"

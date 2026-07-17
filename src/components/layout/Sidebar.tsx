@@ -15,6 +15,8 @@ import {
   ClipboardList,
   ChevronLeft,
   ChevronRight,
+  Shield,
+  User,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useAuth } from '../../context/AuthContext';
@@ -33,11 +35,13 @@ const navItems: NavItem[] = [
   { to: '/attendance', label: 'Absensi', icon: <Clock className="h-5 w-5" /> },
   { to: '/leave', label: 'Cuti', icon: <CalendarOff className="h-5 w-5" /> },
   { to: '/permission', label: 'Izin', icon: <ClipboardList className="h-5 w-5" /> },
-  { to: '/payroll', label: 'Payroll', icon: <Wallet className="h-5 w-5" />, roles: ['Administrator', 'HR', 'Employee'] },
+  { to: '/payroll', label: 'Payroll', icon: <Wallet className="h-5 w-5" />, roles: ['Administrator', 'HR'] },
   { to: '/departments', label: 'Departemen', icon: <Building2 className="h-5 w-5" />, roles: ['Administrator', 'HR'] },
   { to: '/divisions', label: 'Divisi', icon: <GitBranch className="h-5 w-5" />, roles: ['Administrator', 'HR'] },
   { to: '/positions', label: 'Jabatan', icon: <Briefcase className="h-5 w-5" />, roles: ['Administrator', 'HR'] },
   { to: '/announcements', label: 'Pengumuman', icon: <Megaphone className="h-5 w-5" /> },
+  { to: '/access', label: 'Akses', icon: <Shield className="h-5 w-5" />, roles: ['Administrator'] },
+  { to: '/face-enrollment', label: 'Face ID', icon: <User className="h-5 w-5" /> },
   { to: '/reports', label: 'Laporan', icon: <BarChart3 className="h-5 w-5" />, roles: ['Administrator', 'HR', 'Manager'] },
   { to: '/profile', label: 'Profil', icon: <UserCircle className="h-5 w-5" /> },
   { to: '/settings', label: 'Pengaturan', icon: <Settings className="h-5 w-5" />, roles: ['Administrator'] },

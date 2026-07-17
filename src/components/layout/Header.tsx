@@ -15,6 +15,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { Avatar } from '../ui/Avatar';
 import { Badge } from '../ui/Badge';
+import { BackendStatus } from '../ui/BackendStatus';
 import { cn } from '../../lib/utils';
 
 interface HeaderProps {
@@ -72,6 +73,8 @@ export function Header({ onMenuClick, title }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-1 sm:gap-2">
+          <BackendStatus />
+
           {!online && (
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 dark:bg-red-950 text-red-600 text-xs font-medium">
               <WifiOff className="h-3.5 w-3.5" />

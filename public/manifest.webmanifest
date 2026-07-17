@@ -1,18 +1,33 @@
 {
-  "name": "HRIS Lite Enterprise",
-  "short_name": "HRIS Lite",
-  "description": "Sistem Manajemen SDM dan akses karyawan.",
+  "name": "HRIS Lite - Absensi Karyawan",
+  "short_name": "HRIS Karyawan",
+  "description": "Aplikasi absensi, cuti, dan izin untuk karyawan.",
   "lang": "id",
   "start_url": "./#/login",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#F8FAFC",
+  "orientation": "portrait",
+  "background_color": "#0D47A1",
   "theme_color": "#0D47A1",
+  "categories": ["business", "productivity"],
+  "screenshots": [],
   "icons": [
     {
       "src": "./icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

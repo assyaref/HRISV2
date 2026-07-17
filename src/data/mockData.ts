@@ -307,14 +307,14 @@ export const announcements: Announcement[] = [
 
 export const settings: CompanySetting = {
   companyName: 'HRIS Lite Enterprise',
-  companyAddress: 'Jl. Jenderal Sudirman Kav. 52-53, Jakarta Selatan 12190',
+  companyAddress: 'Pekanbaru, Riau',
   companyPhone: '+62 21 1234 5678',
   companyEmail: 'info@hrislite.com',
   workStartTime: '08:00',
   workEndTime: '17:00',
   lateToleranceMinutes: 15,
-  officeLat: -6.2088,
-  officeLng: 106.8456,
+  officeLat: -1.282646,
+  officeLng: 101.181111,
   officeRadiusMeters: 200,
   holidays: ['2026-01-01', '2026-03-30', '2026-05-01', '2026-08-17', '2026-12-25'],
   theme: 'light',
