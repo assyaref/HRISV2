@@ -210,6 +210,9 @@ function handleRequest(e, method) {
       case 'uploadPhoto':
         result = UploadService.uploadPhoto(params.base64, params.filename, params.mimeType);
         break;
+      case 'uploadPayslip':
+        result = UploadService.uploadPayslip(params.base64, params.filename, params.employeeId, params.period);
+        break;
 
       // Report
       case 'report':

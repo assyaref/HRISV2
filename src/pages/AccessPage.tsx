@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, Pencil, Trash2, Key, Shield, UserCheck, UserX, Mail, User as UserIcon } from 'lucide-react';
+import { Plus, Pencil, Trash2, Key, Shield, UserCheck, UserX, Mail, User as UserIcon, Scan, Eye } from 'lucide-react';
 import Swal from 'sweetalert2';
 import * as api from '../services/api';
 import type { User, Role, Employee } from '../types';
@@ -63,6 +63,9 @@ export function AccessPage() {
   });
   const [resetPassword, setResetPassword] = useState('');
   const [filterRole, setFilterRole] = useState('');
+  const [faceModalOpen, setFaceModalOpen] = useState(false);
+  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [viewingFace, setViewingFace] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -109,6 +112,12 @@ export function AccessPage() {
     setSelectedUser(user);
     setResetPassword('');
     setResetPassOpen(true);
+  };
+
+  const openFaceModal = (emp: Employee) => {
+    setSelectedEmployee(emp);
+    setViewingFace(false);
+    setFaceModalOpen(true);
   };
 
   const handleSave = async () => {
@@ -232,11 +241,25 @@ export function AccessPage() {
     {
       key: 'employeeId',
       label: 'Terkait Karyawan',
-      render: (row) => (
-        <span className="text-sm text-slate-600 dark:text-slate-400">
-          {getEmployeeName(row.employeeId)}
-        </span>
-      ),
+      render: (row) => {
+        const emp = employees.find(e => e.id === row.employeeId);
+        return (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-600 dark:text-slate-400">
+              {getEmployeeName(row.employeeId)}
+            </span>
+            {emp && (
+              <button
+                onClick={() => openFaceModal(emp)}
+                className="p-1 rounded hover:bg-purple-50 dark:hover:bg-purple-950 text-purple-600"
+                title="Lihat Face Descriptor"
+              >
+                <Scan className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'isActive',
@@ -552,6 +575,96 @@ export function AccessPage() {
             hint="User akan login dengan password baru ini"
           />
         </div>
+      </Modal>
+
+      {/* Face Descriptor Modal */}
+      <Modal
+        open={faceModalOpen}
+        onClose={() => { setFaceModalOpen(false); setSelectedEmployee(null); setViewingFace(false); }}
+        title="Face Descriptor - Koleksi Wajah"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => { setFaceModalOpen(false); setSelectedEmployee(null); setViewingFace(false); }}>Tutup</Button>
+            {selectedEmployee?.faceDescriptor && !viewingFace && (
+              <Button onClick={() => setViewingFace(true)}>
+                <Eye className="h-4 w-4" /> Lihat Full Descriptor
+              </Button>
+            )}
+          </>
+        }
+      >
+        {selectedEmployee && (
+          <div className="space-y-4">
+            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                {selectedEmployee.fullName} ({selectedEmployee.employeeId})
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                Status: {selectedEmployee.faceRegistered ? (
+                  <span className="text-emerald-600 font-medium">✓ Terdaftar</span>
+                ) : (
+                  <span className="text-red-600 font-medium">✗ Belum Terdaftar</span>
+                )}
+              </p>
+            </div>
+
+            {!viewingFace ? (
+              <div className="space-y-3">
+                <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
+                  <div className="flex items-start gap-2">
+                    <Scan className="h-5 w-5 text-blue-600 shrink-0 mt-0.5" />
+                    <div className="text-sm text-blue-800 dark:text-blue-300">
+                      <p className="font-medium mb-1">Koleksi Face Descriptor</p>
+                      <p className="text-xs">
+                        Face descriptor adalah representasi matematis dari wajah karyawan (128 fitur).
+                        Data ini disimpan di spreadsheet <strong>EMPLOYEE</strong> sheet dan digunakan untuk verifikasi absensi.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {selectedEmployee.faceDescriptor ? (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                      Face Descriptor (Preview)
+                    </label>
+                    <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 font-mono text-xs break-all max-h-40 overflow-y-auto">
+                      {selectedEmployee.faceDescriptor.substring(0, 200)}...
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      Total: {JSON.parse(selectedEmployee.faceDescriptor).length} features
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800">
+                    <p className="text-sm text-red-800 dark:text-red-300">
+                      Karyawan ini belum melakukan pendaftaran wajah (Face Enrollment).
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-300 mb-2">
+                    ⚠️ Face Descriptor Lengkap (128 Fitur)
+                  </p>
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Jangan bagikan data ini kepada pihak yang tidak berwenang. Data ini digunakan untuk verifikasi identitas karyawan.
+                  </p>
+                </div>
+                <div className="p-4 rounded-xl bg-slate-100 dark:bg-slate-800">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    Full Face Descriptor Array
+                  </label>
+                  <pre className="font-mono text-xs break-all max-h-96 overflow-y-auto p-3 bg-white dark:bg-slate-900 rounded-lg">
+                    {selectedEmployee.faceDescriptor}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

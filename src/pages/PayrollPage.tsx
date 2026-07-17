@@ -169,16 +169,19 @@ export function PayrollPage() {
       reader.onload = async (e) => {
         const base64 = e.target?.result as string;
         
-        // Save to database (local mode)
-        const payrolls = db.getPayrolls();
-        const idx = payrolls.findIndex(p => p.id === selectedPayroll.id);
-        if (idx >= 0) {
-          payrolls[idx].notes = base64; // Store PDF as base64 in notes field
-          db.setPayrolls(payrolls);
-          toast.success('Slip gaji berhasil diupload');
+        // Upload to Google Drive via GAS backend
+        const emp = db.getEmployeeById(selectedPayroll.employeeId);
+        const filename = `slip-gaji-${emp?.employeeId || selectedPayroll.employeeId}-${selectedPayroll.period}.pdf`;
+        
+        const res = await api.uploadPayslip(base64, filename, selectedPayroll.employeeId, selectedPayroll.period);
+        
+        if (res.success) {
+          toast.success('Slip gaji berhasil diupload ke Google Drive');
           setUploadOpen(false);
           setPdfFile(null);
           setSelectedPayroll(null);
+        } else {
+          toast.error(res.message || 'Gagal upload slip gaji');
         }
         setUploading(false);
       };

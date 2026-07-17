@@ -1341,3 +1341,11 @@ export async function uploadPhoto(base64: string, filename: string, mimeType: st
     return fail('Upload foto tidak tersedia di mode lokal');
   }
 }
+
+export async function uploadPayslip(base64: string, filename: string, employeeId: string, period: string): Promise<ApiResponse<{ url: string }>> {
+  try {
+    return await callAPI<{ url: string }>('uploadPayslip', { base64, filename, employeeId, period });
+  } catch {
+    return fail('Upload slip gaji tidak tersedia di mode lokal');
+  }
+}
