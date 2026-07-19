@@ -96,6 +96,9 @@ function handleRequest(e, method) {
       case 'checkout':
         result = AttendanceService.checkOut(params, session);
         break;
+      case 'verifyAttendanceFace':
+        result = UserService.verifyFace(params, session);
+        break;
 
       // Leave
       case 'leave':
@@ -201,9 +204,6 @@ function handleRequest(e, method) {
         break;
       case 'getFaceEnrollmentStatus':
         result = UserService.getFaceStatus(params, session);
-        break;
-      case 'verifyAttendanceFace':
-        result = UserService.verifyFace(params, session);
         break;
 
       // Upload

@@ -624,12 +624,16 @@ export async function checkIn(payload: {
   lat?: number;
   lng?: number;
   photo?: string;
+  faceDescriptor?: number[];
+  faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
   try {
     return await callAPI<Attendance>('checkin', {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || '',
+      faceDescriptor: payload.faceDescriptor || [],
+      faceVerified: payload.faceVerified || false,
     });
   } catch {
     await delay(400);
@@ -702,12 +706,16 @@ export async function checkOut(payload: {
   lat?: number;
   lng?: number;
   photo?: string;
+  faceDescriptor?: number[];
+  faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
   try {
     return await callAPI<Attendance>('checkout', {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || '',
+      faceDescriptor: payload.faceDescriptor || [],
+      faceVerified: payload.faceVerified || false,
     });
   } catch {
     await delay(400);
@@ -1279,26 +1287,31 @@ export async function checkGASHealth(): Promise<ApiResponse> {
 
 // ========== FACE ENROLLMENT & VERIFICATION ==========
 export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse> {
-  await delay();
-  const session = requireAuth();
-  if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse;
+  try {
+    return await callAPI('enrollFace', { faceDescriptor });
+  } catch {
+    // Fallback ke localStorage
+    await delay();
+    const session = requireAuth();
+    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse;
 
-  const employees = db.getEmployees();
-  const idx = employees.findIndex((e) => e.id === session.employeeId);
-  if (idx < 0) return fail('Karyawan tidak ditemukan') as ApiResponse;
+    const employees = db.getEmployees();
+    const idx = employees.findIndex((e) => e.id === session.employeeId);
+    if (idx < 0) return fail('Karyawan tidak ditemukan') as ApiResponse;
 
-  employees[idx].faceDescriptor = JSON.stringify(faceDescriptor);
-  employees[idx].faceRegistered = true;
-  db.setEmployees(employees);
-  db.addLog({ userId: session.userId, userName: session.name, action: 'ENROLL_FACE', module: 'Face Recognition', details: `Face enrolled for ${employees[idx].fullName}` });
-  
-  return ok(null, 'Wajah berhasil didaftarkan');
+    employees[idx].faceDescriptor = JSON.stringify(faceDescriptor);
+    employees[idx].faceRegistered = true;
+    db.setEmployees(employees);
+    db.addLog({ userId: session.userId, userName: session.name, action: 'ENROLL_FACE', module: 'Face Recognition', details: `Face enrolled for ${employees[idx].fullName}` });
+    
+    return ok(null, 'Wajah berhasil didaftarkan');
+  }
 }
 
 export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{ match: boolean; similarity: number }>> {
   await delay();
   const session = requireAuth();
-  if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse;
+  if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as unknown as ApiResponse<{ match: boolean; similarity: number }>;
 
   const employee = db.getEmployeeById(session.employeeId);
   if (!employee?.faceDescriptor) {

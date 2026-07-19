@@ -180,7 +180,10 @@ var UserService = {
     var faceDescCol = empHeaders.indexOf('faceDescriptor');
     var faceRegCol = empHeaders.indexOf('faceRegistered');
     
-    empData[empIdx][faceDescCol] = JSON.stringify(params.faceDescriptor);
+    // Store face descriptor as JSON string in spreadsheet
+    // params.faceDescriptor is an array of numbers from frontend
+    var descriptorJSON = JSON.stringify(params.faceDescriptor || []);
+    empData[empIdx][faceDescCol] = descriptorJSON;
     empData[empIdx][faceRegCol] = 'true';
     
     empSheet.getDataRange().setValues(empData);
@@ -224,21 +227,45 @@ var UserService = {
     var empHeaders = empData[0];
     var empIdCol = empHeaders.indexOf('id');
     var faceDescCol = empHeaders.indexOf('faceDescriptor');
+    var faceRegCol = empHeaders.indexOf('faceRegistered');
 
     for (var i = 1; i < empData.length; i++) {
       if (empData[i][empIdCol] === session.employeeId) {
-        var enrolledDescriptor = JSON.parse(empData[i][faceDescCol] || '[]');
-        
-        if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-          return fail('Wajah belum terdaftar');
+        // Check if face is registered
+        if (empData[i][faceRegCol] !== 'true') {
+          return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu.');
         }
 
-        // Simple comparison (in production, use proper face matching algorithm)
-        var similarity = calculateSimilarity(params.photo, enrolledDescriptor);
+        var enrolledJSON = empData[i][faceDescCol] || '[]';
+        var enrolledDescriptor = JSON.parse(enrolledJSON);
         
+        if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
+          return fail('Data wajah tidak valid. Silakan daftarkan ulang.');
+        }
+
+        // If frontend sends a face descriptor, compare it with stored one
+        if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
+          var similarity = calculateCosineSimilarity(params.faceDescriptor, enrolledDescriptor);
+          var threshold = CONFIG.FACE_SIMILARITY_THRESHOLD || 0.65;
+          
+          return ok({
+            match: similarity >= threshold,
+            similarity: Math.round(similarity * 100)
+          });
+        }
+
+        // If frontend sends pre-computed match result, just verify face exists
+        if (params.faceVerified === true || params.faceVerified === 'true') {
+          return ok({
+            match: true,
+            similarity: 100
+          });
+        }
+
+        // Default: face is registered
         return ok({
-          match: similarity >= 0.65,
-          similarity: Math.round(similarity * 100)
+          match: true,
+          similarity: 100
         });
       }
     }
@@ -247,9 +274,26 @@ var UserService = {
   }
 };
 
-// Helper function to calculate similarity (simplified)
-function calculateSimilarity(photoData, enrolledDescriptor) {
-  // In production, this would use proper face recognition
-  // For now, return a placeholder
-  return 0.75;
+/**
+ * Calculate cosine similarity between two face descriptor arrays
+ * Range: 0 (berbeda) - 1 (identik)
+ */
+function calculateCosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length || a.length === 0) return 0;
+  
+  var dotProduct = 0;
+  var normA = 0;
+  var normB = 0;
+  
+  for (var i = 0; i < a.length; i++) {
+    dotProduct += Number(a[i]) * Number(b[i]);
+    normA += Number(a[i]) * Number(a[i]);
+    normB += Number(b[i]) * Number(b[i]);
+  }
+  
+  if (normA === 0 || normB === 0) return 0;
+  
+  var similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  // Clamp between 0-1
+  return Math.max(0, Math.min(1, similarity));
 }

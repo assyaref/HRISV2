@@ -12,6 +12,7 @@ import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { formatDate, formatTime, exportToExcel, getCurrentPosition, todayStr } from '../lib/utils';
 import { db } from '../lib/db';
+import { validateFace, type FaceValidationResult } from '../services/faceRecognition';
 
 export function AttendancePage() {
   const toast = useToast();
@@ -22,6 +23,9 @@ export function AttendancePage() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [checkType, setCheckType] = useState<'in' | 'out'>('in');
   const [photo, setPhoto] = useState<string | null>(null);
+  const [faceDescriptor, setFaceDescriptor] = useState<number[] | null>(null);
+  const [faceValidation, setFaceValidation] = useState<FaceValidationResult | null>(null);
+  const [faceVerified, setFaceVerified] = useState(false);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locLoading, setLocLoading] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
@@ -66,6 +70,9 @@ export function AttendancePage() {
   const startCamera = async (type: 'in' | 'out') => {
     setCheckType(type);
     setPhoto(null);
+    setFaceDescriptor(null);
+    setFaceValidation(null);
+    setFaceVerified(false);
     setCameraOpen(true);
     await getLocation();
     try {
@@ -91,7 +98,22 @@ export function AttendancePage() {
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0);
-      setPhoto(canvas.toDataURL('image/jpeg', 0.7));
+      const photoData = canvas.toDataURL('image/jpeg', 0.7);
+      setPhoto(photoData);
+      
+      // Validate face and extract descriptor
+      const validation = validateFace(canvas);
+      setFaceValidation(validation);
+      
+      if (validation.detected && validation.descriptor) {
+        setFaceDescriptor(validation.descriptor);
+        setFaceVerified(true);
+        toast.success('Wajah terdeteksi!');
+      } else {
+        setFaceDescriptor(null);
+        setFaceVerified(false);
+        toast.warning(validation.message || 'Wajah tidak terdeteksi dengan baik. Silakan coba lagi.');
+      }
     }
   };
 
@@ -100,15 +122,23 @@ export function AttendancePage() {
     streamRef.current = null;
     setCameraOpen(false);
     setPhoto(null);
+    setFaceDescriptor(null);
+    setFaceValidation(null);
+    setFaceVerified(false);
   };
 
   const submitCheck = async () => {
     setChecking(true);
+    
+    // Build payload with face verification data
     const payload = {
       lat: location?.lat,
       lng: location?.lng,
       photo: photo || undefined,
+      faceDescriptor: faceDescriptor || undefined,
+      faceVerified: faceVerified || undefined,
     };
+    
     const res = checkType === 'in' ? await api.checkIn(payload) : await api.checkOut(payload);
     setChecking(false);
     if (res.success) {
@@ -263,13 +293,17 @@ export function AttendancePage() {
       <Modal
         open={cameraOpen}
         onClose={stopCamera}
-        title={checkType === 'in' ? 'Check In' : 'Check Out'}
+        title={checkType === 'in' ? 'Check In - Verifikasi Wajah' : 'Check Out - Verifikasi Wajah'}
         size="md"
         footer={
           <>
             <Button variant="outline" onClick={stopCamera}>Batal</Button>
-            <Button onClick={submitCheck} loading={checking}>
-              {checkType === 'in' ? 'Konfirmasi Check In' : 'Konfirmasi Check Out'}
+            <Button 
+              onClick={submitCheck} 
+              loading={checking}
+              disabled={!faceVerified && !photo}
+            >
+              {checking ? 'Memproses...' : (checkType === 'in' ? 'Konfirmasi Check In' : 'Konfirmasi Check Out')}
             </Button>
           </>
         }
@@ -289,19 +323,38 @@ export function AttendancePage() {
             )}
           </div>
 
+          {/* Face Validation Status */}
+          {faceValidation && (
+            <div className={`p-3 rounded-xl text-sm ${
+              faceValidation.detected 
+                ? 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 text-emerald-700 dark:text-emerald-300'
+                : 'bg-red-50 dark:bg-red-950/30 border border-red-200 text-red-700 dark:text-red-300'
+            }`}>
+              <div className="flex items-center gap-2">
+                {faceValidation.detected ? (
+                  <span>✅ Wajah terverifikasi ({faceValidation.confidence}%)</span>
+                ) : (
+                  <span>❌ {faceValidation.message}</span>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2 justify-center">
             {!photo ? (
-              <Button variant="secondary" onClick={capturePhoto}>
-                <Camera className="h-4 w-4" /> Ambil Foto
+              <Button variant="secondary" onClick={capturePhoto} size="lg" className="w-full">
+                <Camera className="h-5 w-5" /> Ambil Foto & Verifikasi Wajah
               </Button>
             ) : (
-              <Button variant="outline" onClick={() => setPhoto(null)}>
-                <Camera className="h-4 w-4" /> Ulangi
-              </Button>
+              <div className="flex gap-2 w-full">
+                <Button variant="outline" onClick={() => setPhoto(null)} className="flex-1">
+                  <Camera className="h-4 w-4" /> Ulangi
+                </Button>
+                <Button variant="outline" onClick={getLocation} loading={locLoading}>
+                  <Navigation className="h-4 w-4" /> GPS
+                </Button>
+              </div>
             )}
-            <Button variant="outline" onClick={getLocation} loading={locLoading}>
-              <Navigation className="h-4 w-4" /> GPS
-            </Button>
           </div>
 
           {location && (
@@ -311,10 +364,20 @@ export function AttendancePage() {
             </div>
           )}
 
-          <div className="text-center text-sm text-slate-500">
-            <p>Pastikan wajah terlihat jelas (Face Verification)</p>
-            <p className="text-xs text-slate-400 mt-1">Lokasi GPS akan dicatat untuk validasi kehadiran</p>
-          </div>
+          {/* Face Verification Instructions */}
+          {!photo && (
+            <div className="text-center text-sm text-slate-500 space-y-1">
+              <p className="font-medium text-slate-700 dark:text-slate-300">Verifikasi Wajah Diperlukan</p>
+              <p>Ambil foto untuk memverifikasi identitas Anda</p>
+              <p className="text-xs text-slate-400">Pastikan wajah terlihat jelas dan pencahayaan cukup</p>
+            </div>
+          )}
+          
+          {photo && !faceVerified && (
+            <div className="text-center text-sm text-amber-600">
+              <p>Wajah tidak terverifikasi. Silakan ambil foto ulang dengan posisi yang lebih baik.</p>
+            </div>
+          )}
         </div>
       </Modal>
     </div>
