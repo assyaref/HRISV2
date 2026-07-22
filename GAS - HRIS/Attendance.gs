@@ -43,14 +43,14 @@ var AttendanceService = {
     var storedDescriptor = [];
 
     for (var ei = 1; ei < empData.length; ei++) {
-      if (String(empData[ei][empIdCol]) === String(session.employeeId)) {
+      if (String(empData[ei][empIdCol]).trim() === String(session.employeeId).trim()) {
         employeeFound = true;
         try {
           storedDescriptor = JSON.parse(String(empData[ei][faceDescCol] || '[]'));
         } catch (e) {
           storedDescriptor = [];
         }
-        isFaceRegistered = String(empData[ei][faceRegCol]).toLowerCase() === 'true' || storedDescriptor.length > 0;
+        isFaceRegistered = storedDescriptor.length > 0;
         break;
       }
     }
@@ -156,13 +156,13 @@ var AttendanceService = {
     var storedDescriptor = [];
 
     for (var ei = 1; ei < empData.length; ei++) {
-      if (String(empData[ei][empIdCol]) === String(session.employeeId)) {
+      if (String(empData[ei][empIdCol]).trim() === String(session.employeeId).trim()) {
         try {
           storedDescriptor = JSON.parse(String(empData[ei][faceDescCol] || '[]'));
         } catch (e) {
           storedDescriptor = [];
         }
-        isFaceRegistered = String(empData[ei][faceRegCol]).toLowerCase() === 'true' || storedDescriptor.length > 0;
+        isFaceRegistered = storedDescriptor.length > 0;
         break;
       }
     }

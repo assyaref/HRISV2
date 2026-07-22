@@ -1333,17 +1333,22 @@ export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{
 }
 
 export async function getFaceEnrollmentStatus(): Promise<ApiResponse<{ enrolled: boolean; employeeName?: string }>> {
-  await delay();
-  const session = requireAuth();
-  if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
+  try {
+    return await callAPI<{ enrolled: boolean; employeeName?: string }>('getFaceEnrollmentStatus');
+  } catch {
+    // Fallback ke localStorage
+    await delay();
+    const session = requireAuth();
+    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
 
-  const employee = db.getEmployeeById(session.employeeId);
-  if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
+    const employee = db.getEmployeeById(session.employeeId);
+    if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
 
-  return ok({
-    enrolled: employee.faceRegistered || false,
-    employeeName: employee.fullName,
-  });
+    return ok({
+      enrolled: employee.faceRegistered || false,
+      employeeName: employee.fullName,
+    });
+  }
 }
 
 // ========== UPLOAD ==========
