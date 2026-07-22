@@ -87,7 +87,7 @@ function checkFaceColumns() {
   var faceRegCol = headers.indexOf('faceRegistered');
   
   for (var i = 1; i < data.length; i++) {
-    if (faceRegCol >= 0 && String(data[i][faceRegCol]) === 'true') {
+    if (faceRegCol >= 0 && String(data[i][faceRegCol]).toLowerCase() === 'true') {
       registeredCount++;
     }
   }

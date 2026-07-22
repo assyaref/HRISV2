@@ -166,7 +166,7 @@ var UserService = {
     var empIdx = -1;
 
     for (var i = 1; i < empData.length; i++) {
-      if (empData[i][empIdCol] === session.employeeId) {
+      if (String(empData[i][empIdCol]) === String(session.employeeId)) {
         empIdx = i;
         break;
       }
@@ -206,9 +206,9 @@ var UserService = {
     var nameCol = empHeaders.indexOf('fullName');
 
     for (var i = 1; i < empData.length; i++) {
-      if (empData[i][empIdCol] === session.employeeId) {
+      if (String(empData[i][empIdCol]) === String(session.employeeId)) {
         return ok({
-          enrolled: empData[i][faceRegCol] === 'true',
+          enrolled: String(empData[i][faceRegCol]).toLowerCase() === 'true' || (String(empData[i][faceDescCol] || '').trim().length > 2 && String(empData[i][faceDescCol] || '').trim() !== '[]'),
           employeeName: empData[i][nameCol]
         });
       }
@@ -230,9 +230,11 @@ var UserService = {
     var faceRegCol = empHeaders.indexOf('faceRegistered');
 
     for (var i = 1; i < empData.length; i++) {
-      if (empData[i][empIdCol] === session.employeeId) {
+      if (String(empData[i][empIdCol]) === String(session.employeeId)) {
         // Check if face is registered
-        if (empData[i][faceRegCol] !== 'true') {
+        var faceDescriptorText = String(empData[i][faceDescCol] || '').trim();
+        var faceRegistered = String(empData[i][faceRegCol]).toLowerCase() === 'true' || (faceDescriptorText.length > 2 && faceDescriptorText !== '[]');
+        if (!faceRegistered) {
           return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu.');
         }
 

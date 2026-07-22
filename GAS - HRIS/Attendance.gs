@@ -43,16 +43,14 @@ var AttendanceService = {
     var storedDescriptor = [];
 
     for (var ei = 1; ei < empData.length; ei++) {
-      if (empData[ei][empIdCol] === session.employeeId) {
+      if (String(empData[ei][empIdCol]) === String(session.employeeId)) {
         employeeFound = true;
-        isFaceRegistered = empData[ei][faceRegCol] === 'true';
-        if (isFaceRegistered) {
-          try {
-            storedDescriptor = JSON.parse(empData[ei][faceDescCol] || '[]');
-          } catch (e) {
-            storedDescriptor = [];
-          }
+        try {
+          storedDescriptor = JSON.parse(String(empData[ei][faceDescCol] || '[]'));
+        } catch (e) {
+          storedDescriptor = [];
         }
+        isFaceRegistered = String(empData[ei][faceRegCol]).toLowerCase() === 'true' || storedDescriptor.length > 0;
         break;
       }
     }
@@ -158,15 +156,13 @@ var AttendanceService = {
     var storedDescriptor = [];
 
     for (var ei = 1; ei < empData.length; ei++) {
-      if (empData[ei][empIdCol] === session.employeeId) {
-        isFaceRegistered = empData[ei][faceRegCol] === 'true';
-        if (isFaceRegistered) {
-          try {
-            storedDescriptor = JSON.parse(empData[ei][faceDescCol] || '[]');
-          } catch (e) {
-            storedDescriptor = [];
-          }
+      if (String(empData[ei][empIdCol]) === String(session.employeeId)) {
+        try {
+          storedDescriptor = JSON.parse(String(empData[ei][faceDescCol] || '[]'));
+        } catch (e) {
+          storedDescriptor = [];
         }
+        isFaceRegistered = String(empData[ei][faceRegCol]).toLowerCase() === 'true' || storedDescriptor.length > 0;
         break;
       }
     }
