@@ -44,8 +44,8 @@ export function FaceEnrollmentPage() {
       
       // Also clean up video element's srcObject
       if (videoRef.current) {
+        videoRef.current.pause();
         videoRef.current.srcObject = null;
-        videoRef.current.load();
       }
     } catch (e) {
       console.warn('Error releasing camera:', e);
@@ -68,9 +68,17 @@ export function FaceEnrollmentPage() {
     if (!element || !stream) return;
 
     element.srcObject = stream;
-    element.play().catch((error) => {
-      console.warn('Video play error:', error);
-    });
+    const playVideo = () => {
+      element.play().catch((error: unknown) => {
+        // The browser can reject a stale play request while replacing a stream.
+        // It is harmless as long as the current stream remains attached.
+        if ((error as DOMException)?.name !== 'AbortError') {
+          console.warn('Video play error:', error);
+        }
+      });
+    };
+    if (element.readyState >= HTMLMediaElement.HAVE_METADATA) playVideo();
+    else element.onloadedmetadata = playVideo;
   }, []);
 
   // Cleanup on unmount
@@ -88,11 +96,6 @@ export function FaceEnrollmentPage() {
     }
     setLoading(false);
   };
-
-  // Effect: assign stream to video element once it renders
-  useEffect(() => {
-    if (cameraActive) attachStreamToVideo(videoRef.current);
-  }, [cameraActive, attachStreamToVideo]);
 
   const startCamera = useCallback(async () => {
     if (cameraStarting) return;
@@ -128,7 +131,6 @@ export function FaceEnrollmentPage() {
       streamRef.current = stream;
       setCameraActive(true);
       setValidation(null);
-      attachStreamToVideo(videoRef.current);
     } catch (err: any) {
       console.error('Camera error:', err);
       
@@ -147,7 +149,7 @@ export function FaceEnrollmentPage() {
     } finally {
       setCameraStarting(false);
     }
-  }, [attachStreamToVideo, cameraStarting, releaseCamera, toast]);
+  }, [cameraStarting, releaseCamera, toast]);
 
   const captureAndValidate = () => {
     if (!videoRef.current) return;

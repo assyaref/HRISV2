@@ -229,7 +229,10 @@ export function validateFace(canvas: HTMLCanvasElement): FaceValidationResult {
     }
   }
   const avgBlur = blurScore / sampleCount;
-  const isBlurry = avgBlur < 12; // More tolerant to blur
+  // Camera previews often have mild compression/noise, especially on mobile.
+  // Keep rejecting genuinely flat/blurred frames, but do not reject a sharp
+  // face merely because the preview has been downsampled by the browser.
+  const isBlurry = avgBlur < 7;
 
   // Face position
   let facePosition: FaceValidationResult['details']['facePosition'] = 'center';
