@@ -26,6 +26,7 @@ export function FaceEnrollmentPage() {
   const [enrolled, setEnrolled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
 
   const employee = session?.employeeId ? db.getEmployeeById(session.employeeId) : null;
 
@@ -58,6 +59,20 @@ export function FaceEnrollmentPage() {
     setValidation(null);
   }, [releaseCamera]);
 
+  // The video element is conditionally rendered. A callback ref makes sure a
+  // stream is attached even when React renders the element after getUserMedia
+  // has already resolved.
+  const attachStreamToVideo = useCallback((element: HTMLVideoElement | null) => {
+    videoRef.current = element;
+    const stream = streamRef.current;
+    if (!element || !stream) return;
+
+    element.srcObject = stream;
+    element.play().catch((error) => {
+      console.warn('Video play error:', error);
+    });
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     checkEnrollmentStatus();
@@ -76,21 +91,22 @@ export function FaceEnrollmentPage() {
 
   // Effect: assign stream to video element once it renders
   useEffect(() => {
-    if (cameraActive && streamRef.current && videoRef.current) {
-      videoRef.current.srcObject = streamRef.current;
-      videoRef.current.play().catch((err) => {
-        console.warn('Video play error:', err);
-      });
-    }
-  }, [cameraActive]);
+    if (cameraActive) attachStreamToVideo(videoRef.current);
+  }, [cameraActive, attachStreamToVideo]);
 
   const startCamera = useCallback(async () => {
-    try {
-      // Release any existing camera resources first, then wait for cleanup
-      releaseCamera();
-      await new Promise((r) => setTimeout(r, 200));
+    if (cameraStarting) return;
 
-      // Try with minimal constraints first for compatibility
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      toast.error('Kamera hanya dapat digunakan melalui HTTPS atau localhost.');
+      return;
+    }
+
+    setCameraStarting(true);
+    try {
+      // Release any existing camera resources before requesting a new stream.
+      releaseCamera();
+
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -110,16 +126,9 @@ export function FaceEnrollmentPage() {
       }
 
       streamRef.current = stream;
-
-      // Set cameraActive to true FIRST so the <video> renders, then useEffect assigns stream
       setCameraActive(true);
       setValidation(null);
-
-      // If video element already exists, assign stream directly
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-      }
+      attachStreamToVideo(videoRef.current);
     } catch (err: any) {
       console.error('Camera error:', err);
       
@@ -133,8 +142,12 @@ export function FaceEnrollmentPage() {
       }
       
       toast.error(errorMessage);
+      releaseCamera();
+      setCameraActive(false);
+    } finally {
+      setCameraStarting(false);
     }
-  }, [releaseCamera, toast]);
+  }, [attachStreamToVideo, cameraStarting, releaseCamera, toast]);
 
   const captureAndValidate = () => {
     if (!videoRef.current) return;
@@ -298,7 +311,7 @@ export function FaceEnrollmentPage() {
                 <p className="text-sm text-slate-500 mb-4">
                   Klik tombol di bawah untuk mengaktifkan kamera
                 </p>
-                <Button onClick={handleStartEnrollment} size="lg">
+                <Button onClick={handleStartEnrollment} size="lg" loading={cameraStarting} disabled={cameraStarting}>
                   <Camera className="h-5 w-5" /> Aktifkan Kamera
                 </Button>
               </div>
@@ -306,7 +319,7 @@ export function FaceEnrollmentPage() {
               <div className="space-y-4">
                 <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video">
                   <video
-                    ref={videoRef}
+                    ref={attachStreamToVideo}
                     autoPlay
                     playsInline
                     muted
@@ -414,7 +427,7 @@ export function FaceEnrollmentPage() {
               <div className="space-y-4">
                 <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video">
                   <video
-                    ref={videoRef}
+                    ref={attachStreamToVideo}
                     autoPlay
                     playsInline
                     muted
