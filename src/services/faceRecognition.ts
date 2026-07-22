@@ -197,7 +197,8 @@ export function validateFace(canvas: HTMLCanvasElement): FaceValidationResult {
       const brightness = (r + g + b) / 3;
       totalBrightness += brightness;
 
-      const isSkin = r > 95 && g > 40 && b > 20 && r > g && r > b && Math.abs(r - g) > 15;
+      // Lowered red channel threshold for better low-light detection
+      const isSkin = r > 85 && g > 40 && b > 20 && r > g && r > b && Math.abs(r - g) > 15;
       if (isSkin) {
         skinPixelCount++;
         skinCenterX += x;
@@ -228,7 +229,7 @@ export function validateFace(canvas: HTMLCanvasElement): FaceValidationResult {
     }
   }
   const avgBlur = blurScore / sampleCount;
-  const isBlurry = avgBlur < 15;
+  const isBlurry = avgBlur < 12; // More tolerant to blur
 
   // Face position
   let facePosition: FaceValidationResult['details']['facePosition'] = 'center';
@@ -244,7 +245,8 @@ export function validateFace(canvas: HTMLCanvasElement): FaceValidationResult {
   let confidence = 0;
   if (hasFace) confidence += 40;
   if (!isBlurry) confidence += 20;
-  if (avgBrightness > 40 && avgBrightness < 220) confidence += 15;
+  // More lenient brightness check for confidence
+  if (avgBrightness > 25 && avgBrightness < 220) confidence += 15;
   if (skinRatio > 0.08 && skinRatio < 0.35) confidence += 15;
   if (facePosition === 'center') confidence += 10;
 
@@ -256,12 +258,14 @@ export function validateFace(canvas: HTMLCanvasElement): FaceValidationResult {
   }
 
   const messages: string[] = [];
-  if (hasFace && !isBlurry && avgBrightness > 30 && avgBrightness < 230) {
+  // Main success message condition
+  if (hasFace && !isBlurry && avgBrightness > 20 && avgBrightness < 230) {
     messages.push('✅ Wajah terverifikasi');
   } else {
+    // Detailed error messages
     if (!hasFace) messages.push('❌ Wajah tidak terdeteksi');
     if (isBlurry) messages.push('📷 Foto blur');
-    if (avgBrightness < 30) messages.push('🌑 Terlalu gelap');
+    if (avgBrightness < 20) messages.push('🌑 Terlalu gelap'); // Lowered threshold
     if (avgBrightness > 230) messages.push('☀️ Terlalu terang');
     if (facePosition !== 'center') messages.push('🎯 Posisikan wajah di tengah');
   }

@@ -229,6 +229,14 @@ function handleRequest(e, method) {
         result = initAllSheets();
         break;
 
+      // Migration - add face columns to existing sheets
+      case 'migrateFaceColumns':
+        result = addFaceColumnsToExistingSheets();
+        break;
+      case 'checkFaceColumns':
+        result = checkFaceColumns();
+        break;
+
       default:
         result = { success: false, message: 'Action tidak dikenali: ' + action };
     }

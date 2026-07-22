@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera, CheckCircle2, XCircle, User, Shield, Upload, RefreshCw } from 'lucide-react';
 import Swal from 'sweetalert2';
@@ -25,12 +25,45 @@ export function FaceEnrollmentPage() {
   const [validation, setValidation] = useState<ReturnType<typeof validateFace> | null>(null);
   const [enrolled, setEnrolled] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState(false);
 
   const employee = session?.employeeId ? db.getEmployeeById(session.employeeId) : null;
 
+  // Properly release camera resources
+  const releaseCamera = useCallback(() => {
+    try {
+      if (streamRef.current) {
+        const tracks = streamRef.current.getTracks();
+        tracks.forEach((t) => {
+          t.stop();
+          t.enabled = false;
+        });
+        streamRef.current = null;
+      }
+      
+      // Also clean up video element's srcObject
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+        videoRef.current.load();
+      }
+    } catch (e) {
+      console.warn('Error releasing camera:', e);
+    }
+  }, []);
+
+  // Stop camera and clean up all resources
+  const stopCamera = useCallback(() => {
+    releaseCamera();
+    setCameraActive(false);
+    setValidation(null);
+  }, [releaseCamera]);
+
+  // Cleanup on unmount
   useEffect(() => {
     checkEnrollmentStatus();
-    return () => stopCamera();
+    return () => {
+      releaseCamera();
+    };
   }, []);
 
   const checkEnrollmentStatus = async () => {
@@ -41,30 +74,67 @@ export function FaceEnrollmentPage() {
     setLoading(false);
   };
 
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: 640, height: 480 },
-        audio: false,
+  // Effect: assign stream to video element once it renders
+  useEffect(() => {
+    if (cameraActive && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch((err) => {
+        console.warn('Video play error:', err);
       });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+    }
+  }, [cameraActive]);
+
+  const startCamera = useCallback(async () => {
+    try {
+      // Release any existing camera resources first, then wait for cleanup
+      releaseCamera();
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Try with minimal constraints first for compatibility
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'user',
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          },
+          audio: false,
+        });
+      } catch {
+        // Fallback: try without specific resolution
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user' },
+          audio: false,
+        });
       }
+
+      streamRef.current = stream;
+
+      // Set cameraActive to true FIRST so the <video> renders, then useEffect assigns stream
       setCameraActive(true);
       setValidation(null);
-    } catch {
-      toast.error('Tidak dapat mengakses kamera. Pastikan izin kamera diberikan.');
-    }
-  };
 
-  const stopCamera = () => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    setCameraActive(false);
-    setValidation(null);
-  };
+      // If video element already exists, assign stream directly
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      }
+    } catch (err: any) {
+      console.error('Camera error:', err);
+      
+      let errorMessage = 'Tidak dapat mengakses kamera.';
+      if (err.name === 'NotReadableError') {
+        errorMessage = 'Kamera sedang digunakan oleh aplikasi lain. Tutup aplikasi kamera lain dan coba lagi.';
+      } else if (err.name === 'NotAllowedError') {
+        errorMessage = 'Izin kamera ditolak. Izinkan akses kamera di pengaturan browser.';
+      } else if (err.name === 'NotFoundError') {
+        errorMessage = 'Kamera tidak ditemukan. Pastikan perangkat kamera terpasang dengan benar.';
+      }
+      
+      toast.error(errorMessage);
+    }
+  }, [releaseCamera, toast]);
 
   const captureAndValidate = () => {
     if (!videoRef.current) return;
@@ -100,10 +170,16 @@ export function FaceEnrollmentPage() {
     if (res.success) {
       toast.success('Wajah berhasil didaftarkan!');
       setEnrolled(true);
+      setUpdating(false);
       stopCamera();
     } else {
       toast.error(res.message);
     }
+  };
+
+  const handleUpdateCancel = () => {
+    setUpdating(false);
+    stopCamera();
   };
 
   const handleReset = async () => {
@@ -128,8 +204,19 @@ export function FaceEnrollmentPage() {
         employees[idx].faceRegistered = false;
         db.setEmployees(employees);
         setEnrolled(false);
+        setUpdating(false);
         toast.success('Pendaftaran wajah berhasil direset');
       }
+    }
+  };
+
+  const handleStartEnrollment = () => {
+    if (enrolled) {
+      setUpdating(true);
+      // Wait for React to render the update UI, then start camera
+      setTimeout(() => startCamera(), 150);
+    } else {
+      startCamera();
     }
   };
 
@@ -195,8 +282,8 @@ export function FaceEnrollmentPage() {
         </Card>
       )}
 
-      {/* Camera Section */}
-      {!enrolled ? (
+      {/* New Enrollment - Camera Section */}
+      {!enrolled && !updating && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -211,13 +298,12 @@ export function FaceEnrollmentPage() {
                 <p className="text-sm text-slate-500 mb-4">
                   Klik tombol di bawah untuk mengaktifkan kamera
                 </p>
-                <Button onClick={startCamera} size="lg">
+                <Button onClick={handleStartEnrollment} size="lg">
                   <Camera className="h-5 w-5" /> Aktifkan Kamera
                 </Button>
               </div>
             ) : (
               <div className="space-y-4">
-                {/* Video Preview */}
                 <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video">
                   <video
                     ref={videoRef}
@@ -231,7 +317,6 @@ export function FaceEnrollmentPage() {
                   </div>
                 </div>
 
-                {/* Actions */}
                 <div className="flex gap-2 justify-center">
                   <Button
                     variant="secondary"
@@ -245,7 +330,6 @@ export function FaceEnrollmentPage() {
                   </Button>
                 </div>
 
-                {/* Validation Result */}
                 {validation && (
                   <div className={cn(
                     "p-4 rounded-xl border",
@@ -291,7 +375,6 @@ export function FaceEnrollmentPage() {
                   </div>
                 )}
 
-                {/* Enroll Button */}
                 {validation?.detected && (
                   <Button
                     onClick={handleEnroll}
@@ -308,8 +391,98 @@ export function FaceEnrollmentPage() {
             )}
           </CardBody>
         </Card>
-      ) : (
-        /* Enrolled State */
+      )}
+
+      {/* Update Mode */}
+      {updating && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Camera className="h-5 w-5 text-primary" />
+              Update Foto Wajah
+            </CardTitle>
+          </CardHeader>
+          <CardBody>
+            {!cameraActive ? (
+              <div className="text-center py-8">
+                <RefreshCw className="h-16 w-16 text-slate-300 mx-auto mb-4" />
+                <p className="text-sm text-slate-500 mb-4">
+                  Mengaktifkan kamera untuk memperbarui foto wajah...
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover mirror"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-48 h-56 border-2 border-white/40 rounded-full" />
+                  </div>
+                </div>
+
+                <div className="flex gap-2 justify-center">
+                  <Button
+                    variant="secondary"
+                    onClick={captureAndValidate}
+                    disabled={!cameraActive}
+                  >
+                    <Camera className="h-4 w-4" /> Ambil Foto
+                  </Button>
+                  <Button variant="outline" onClick={handleUpdateCancel}>
+                    <XCircle className="h-4 w-4" /> Batal
+                  </Button>
+                </div>
+
+                {validation && (
+                  <div className={cn(
+                    "p-4 rounded-xl border",
+                    validation.detected
+                      ? "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30"
+                      : "bg-red-50 border-red-200 dark:bg-red-950/30"
+                  )}>
+                    <div className="flex items-start gap-3">
+                      {validation.detected ? (
+                        <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <XCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+                      )}
+                      <div className="flex-1">
+                        <p className={cn(
+                          "text-sm font-medium",
+                          validation.detected ? "text-emerald-800 dark:text-emerald-300" : "text-red-800 dark:text-red-300"
+                        )}>
+                          {validation.message}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {validation?.detected && (
+                  <Button
+                    onClick={handleEnroll}
+                    loading={enrolling}
+                    disabled={enrolling}
+                    size="lg"
+                    className="w-full"
+                  >
+                    <Shield className="h-5 w-5" />
+                    {enrolling ? 'Memperbarui...' : 'Perbarui Wajah'}
+                  </Button>
+                )}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Enrolled State */}
+      {enrolled && !updating && (
         <Card>
           <CardBody className="pt-5">
             <div className="text-center py-6">
@@ -321,7 +494,7 @@ export function FaceEnrollmentPage() {
                 Wajah Anda telah terdaftar dan siap untuk verifikasi absensi
               </p>
               <div className="flex gap-2 justify-center">
-                <Button variant="outline" onClick={startCamera}>
+                <Button variant="outline" onClick={handleStartEnrollment}>
                   <RefreshCw className="h-4 w-4" /> Update Foto
                 </Button>
                 <Button variant="outline" onClick={handleReset} className="text-red-600 hover:bg-red-50">
@@ -334,35 +507,37 @@ export function FaceEnrollmentPage() {
       )}
 
       {/* Instructions */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Petunjuk Pendaftaran</CardTitle>
-        </CardHeader>
-        <CardBody>
-          <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
-            <li className="flex items-start gap-2">
-              <span className="text-primary font-bold">1.</span>
-              <span>Pastikan wajah terlihat jelas dan pencahayaan cukup</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary font-bold">2.</span>
-              <span>Posisikan wajah di tengah frame kamera</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary font-bold">3.</span>
-              <span>Hindari penggunaan kacamata, masker, atau aksesoris wajah</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary font-bold">4.</span>
-              <span>Ambil foto dari posisi yang berbeda untuk akurasi lebih tinggi</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="text-primary font-bold">5.</span>
-              <span>Setelah foto terverifikasi, klik "Daftarkan Wajah"</span>
-            </li>
-          </ul>
-        </CardBody>
-      </Card>
+      {!cameraActive && !updating && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Petunjuk Pendaftaran</CardTitle>
+          </CardHeader>
+          <CardBody>
+            <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">1.</span>
+                <span>Pastikan wajah terlihat jelas dan pencahayaan cukup</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">2.</span>
+                <span>Posisikan wajah di tengah frame kamera</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">3.</span>
+                <span>Hindari penggunaan kacamata, masker, atau aksesoris wajah</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">4.</span>
+                <span>Ambil foto dari posisi yang berbeda untuk akurasi lebih tinggi</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-primary font-bold">5.</span>
+                <span>Setelah foto terverifikasi, klik "Daftarkan Wajah"</span>
+              </li>
+            </ul>
+          </CardBody>
+        </Card>
+      )}
     </div>
   );
 }
