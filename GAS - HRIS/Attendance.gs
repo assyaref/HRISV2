@@ -33,6 +33,7 @@ var AttendanceService = {
 
     // 1. FACE VERIFICATION - Check if face is registered
     var empSheet = getSheet('EMPLOYEE');
+    ensureFaceColumns_(empSheet);
     var empData = empSheet.getDataRange().getValues();
     var empHeaders = empData[0];
     var empIdCol = empHeaders.indexOf('id');
@@ -50,7 +51,8 @@ var AttendanceService = {
         } catch (e) {
           storedDescriptor = [];
         }
-        isFaceRegistered = storedDescriptor.length > 0;
+        isFaceRegistered = storedDescriptor.length > 0 ||
+          (faceRegCol >= 0 && String(empData[ei][faceRegCol]).toLowerCase() === 'true');
         break;
       }
     }
@@ -147,6 +149,7 @@ var AttendanceService = {
 
     // 1. FACE VERIFICATION - Check if face is registered
     var empSheet = getSheet('EMPLOYEE');
+    ensureFaceColumns_(empSheet);
     var empData = empSheet.getDataRange().getValues();
     var empHeaders = empData[0];
     var empIdCol = empHeaders.indexOf('id');
@@ -162,7 +165,8 @@ var AttendanceService = {
         } catch (e) {
           storedDescriptor = [];
         }
-        isFaceRegistered = storedDescriptor.length > 0;
+        isFaceRegistered = storedDescriptor.length > 0 ||
+          (faceRegCol >= 0 && String(empData[ei][faceRegCol]).toLowerCase() === 'true');
         break;
       }
     }

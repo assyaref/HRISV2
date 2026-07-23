@@ -158,13 +158,41 @@ var UserService = {
       return fail('Akun tidak terhubung ke data karyawan');
     }
 
-    // Get employee
     var empSheet = getSheet('EMPLOYEE');
-    var empData = empSheet.getDataRange().getValues();
+    
+    // Pastikan kolom face ada. Jika baru ditambahkan, isi semua baris dengan string kosong.
+    var headersBefore = empSheet.getRange(1, 1, 1, empSheet.getLastColumn()).getValues()[0];
+    var needsFaceCols = headersBefore.indexOf('faceDescriptor') < 0 || headersBefore.indexOf('faceRegistered') < 0;
+    ensureFaceColumns_(empSheet);
+    
+    // Re-read data AFTER ensuring columns exist.
+    // CRITICAL: after ensureFaceColumns_ added new columns, getDataRange() may still
+    // return old column count if no data exists below the new headers. We force the
+    // range to include all header columns by reading the full header row first.
+    var lastCol = empSheet.getLastColumn();
+    var lastRow = empSheet.getLastRow();
+    if (lastRow < 2) lastRow = 2; // minimal ada header + 1 baris kosong agar range valid
+    
+    var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
     var empHeaders = empData[0];
     var empIdCol = empHeaders.indexOf('id');
+    var faceDescCol = empHeaders.indexOf('faceDescriptor');
+    var faceRegCol = empHeaders.indexOf('faceRegistered');
+    
+    // Safety check - pastikan kolom face ada
+    if (faceDescCol < 0 || faceRegCol < 0) {
+      return fail('Kolom faceDescriptor/faceRegistered tidak ditemukan. Jalankan migrasi terlebih dahulu.');
+    }
+    
+    // Normalize semua baris ke jumlah kolom yang sama (cegah array jagged)
+    var numCols = empHeaders.length;
+    for (var r = 0; r < empData.length; r++) {
+      while (empData[r].length < numCols) {
+        empData[r].push('');
+      }
+    }
+    
     var empIdx = -1;
-
     for (var i = 1; i < empData.length; i++) {
       if (String(empData[i][empIdCol]).trim() === String(session.employeeId).trim()) {
         empIdx = i;
@@ -173,23 +201,26 @@ var UserService = {
     }
 
     if (empIdx < 0) {
-      return fail('Karyawan tidak ditemukan');
+      return fail('Karyawan tidak ditemukan dengan ID: ' + session.employeeId);
     }
 
-    // Update face descriptor
-    var faceDescCol = empHeaders.indexOf('faceDescriptor');
-    var faceRegCol = empHeaders.indexOf('faceRegistered');
-    
     // Store face descriptor as JSON string in spreadsheet
-    // params.faceDescriptor is an array of numbers from frontend
-    var descriptorJSON = JSON.stringify(params.faceDescriptor || []);
+    var descriptor = Array.isArray(params.faceDescriptor) ? params.faceDescriptor : [];
+    if (descriptor.length === 0) {
+      return fail('Data wajah tidak valid (descriptor kosong). Silakan ambil foto ulang.');
+    }
+    
+    var descriptorJSON = JSON.stringify(descriptor);
     empData[empIdx][faceDescCol] = descriptorJSON;
     empData[empIdx][faceRegCol] = 'true';
     
-    empSheet.getDataRange().setValues(empData);
-    addLog(session.userId, session.name, 'ENROLL_FACE', 'Face Recognition', 'Face enrolled for employee ' + session.employeeId);
+    // Tulis kembali ke sheet - gunakan range yang sama dengan pembacaan
+    empSheet.getRange(1, 1, lastRow, lastCol).setValues(empData);
     
-    return ok(null, 'Wajah berhasil didaftarkan');
+    addLog(session.userId, session.name, 'ENROLL_FACE', 'Face Recognition', 
+      'Face enrolled for employee ' + session.employeeId + ' (descriptor length: ' + descriptor.length + ')');
+    
+    return ok({ descriptorLength: descriptor.length }, 'Wajah berhasil didaftarkan (' + descriptor.length + ' data points)');
   },
 
   getFaceStatus: function (params, session) {
@@ -198,18 +229,35 @@ var UserService = {
     }
 
     var empSheet = getSheet('EMPLOYEE');
-    var empData = empSheet.getDataRange().getValues();
+    ensureFaceColumns_(empSheet);
+    
+    // Baca data dengan range eksplisit untuk menghindari array jagged
+    var lastCol = empSheet.getLastColumn();
+    var lastRow = empSheet.getLastRow();
+    if (lastRow < 2) lastRow = 2;
+    
+    var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
     var empHeaders = empData[0];
     var empIdCol = empHeaders.indexOf('id');
     var faceDescCol = empHeaders.indexOf('faceDescriptor');
     var faceRegCol = empHeaders.indexOf('faceRegistered');
     var nameCol = empHeaders.indexOf('fullName');
+    
+    // Normalize rows untuk mencegah array jagged
+    var numCols = empHeaders.length;
+    for (var r = 0; r < empData.length; r++) {
+      while (empData[r].length < numCols) {
+        empData[r].push('');
+      }
+    }
 
     for (var i = 1; i < empData.length; i++) {
       if (String(empData[i][empIdCol]).trim() === String(session.employeeId).trim()) {
+        var descriptorText = String(empData[i][faceDescCol] || '').trim();
+        var isEnrolled = descriptorText.length > 2 && descriptorText !== '[]';
         return ok({
-          enrolled: String(empData[i][faceDescCol] || '').trim().length > 2 && String(empData[i][faceDescCol] || '').trim() !== '[]',
-          employeeName: empData[i][nameCol]
+          enrolled: isEnrolled,
+          employeeName: empData[i][nameCol] || ''
         });
       }
     }
@@ -223,11 +271,26 @@ var UserService = {
     }
 
     var empSheet = getSheet('EMPLOYEE');
-    var empData = empSheet.getDataRange().getValues();
+    ensureFaceColumns_(empSheet);
+    
+    // Baca data dengan range eksplisit untuk menghindari array jagged
+    var lastCol = empSheet.getLastColumn();
+    var lastRow = empSheet.getLastRow();
+    if (lastRow < 2) lastRow = 2;
+    
+    var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
     var empHeaders = empData[0];
     var empIdCol = empHeaders.indexOf('id');
     var faceDescCol = empHeaders.indexOf('faceDescriptor');
     var faceRegCol = empHeaders.indexOf('faceRegistered');
+    
+    // Normalize rows
+    var numCols = empHeaders.length;
+    for (var r = 0; r < empData.length; r++) {
+      while (empData[r].length < numCols) {
+        empData[r].push('');
+      }
+    }
 
     for (var i = 1; i < empData.length; i++) {
       if (String(empData[i][empIdCol]).trim() === String(session.employeeId).trim()) {
@@ -239,7 +302,12 @@ var UserService = {
         }
 
         var enrolledJSON = empData[i][faceDescCol] || '[]';
-        var enrolledDescriptor = JSON.parse(enrolledJSON);
+        var enrolledDescriptor;
+        try {
+          enrolledDescriptor = JSON.parse(enrolledJSON);
+        } catch (e) {
+          return fail('Data wajah rusak. Silakan daftarkan ulang.');
+        }
         
         if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
           return fail('Data wajah tidak valid. Silakan daftarkan ulang.');
@@ -275,6 +343,26 @@ var UserService = {
     return fail('Karyawan tidak ditemukan');
   }
 };
+
+/**
+ * Pastikan instalasi spreadsheet lama sudah memiliki kolom Face ID.
+ * Dipanggil dari semua endpoint Face ID agar migrasi manual tidak wajib.
+ */
+function ensureFaceColumns_(sheet) {
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var changed = false;
+
+  if (headers.indexOf('faceDescriptor') < 0) {
+    sheet.getRange(1, sheet.getLastColumn() + 1).setValue('faceDescriptor');
+    changed = true;
+  }
+  headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.indexOf('faceRegistered') < 0) {
+    sheet.getRange(1, sheet.getLastColumn() + 1).setValue('faceRegistered');
+    changed = true;
+  }
+  return changed;
+}
 
 /**
  * Calculate cosine similarity between two face descriptor arrays
