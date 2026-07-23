@@ -627,83 +627,13 @@ export async function checkIn(payload: {
   faceDescriptor?: number[];
   faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
-  try {
-    return await callAPI<Attendance>('checkin', {
-      lat: payload.lat || 0,
-      lng: payload.lng || 0,
-      photo: payload.photo || '',
-      faceDescriptor: payload.faceDescriptor || [],
-      faceVerified: payload.faceVerified || false,
-    });
-  } catch {
-    await delay(400);
-    const session = requireAuth();
-    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
-
-    const today = todayStr();
-    const list = db.getAttendances();
-    const existing = list.find((a) => a.employeeId === session.employeeId && a.date === today);
-    if (existing?.checkIn) return fail('Anda sudah check-in hari ini') as ApiResponse<Attendance>;
-
-    const settings = db.getSettings();
-    const now = new Date();
-    const checkInTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-
-    const [startH, startM] = settings.workStartTime.split(':').map(Number);
-    const workStartMinutes = startH * 60 + startM + settings.lateToleranceMinutes;
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const lateMinutes = Math.max(0, currentMinutes - workStartMinutes);
-    const status = lateMinutes > 0 ? 'Late' : 'Present';
-
-    // 1. CEK APAKAH WAJAH SUDAH TERDAFTAR
-    const employee = db.getEmployeeById(session.employeeId);
-    if (!employee?.faceRegistered || !employee?.faceDescriptor) {
-      return fail(
-        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID sebelum melakukan absensi.'
-      ) as ApiResponse<Attendance>;
-    }
-
-    // 2. VERIFIKASI WAJAH DENGAN DATABASE
-    //    Jika faceVerified=true dari frontend, terima saja.
-    //    Jika photo tersedia, lakukan similarity check dengan threshold lebih rendah (0.40).
-    const faceVerifiedByClient = payload.faceVerified === true;
-    
-    if (payload.photo && !faceVerifiedByClient) {
-      const faceRes = await verifyAttendanceFace(payload.photo);
-      if (!faceRes.success || !faceRes.data?.match) {
-        return fail(
-          faceRes.message || 'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar.'
-        ) as ApiResponse<Attendance>;
-      }
-    }
-
-    // 3. GEOFENCING VALIDATION - HARUS DALAM RADIUS KANTOR
-    if (payload.lat != null && payload.lng != null) {
-      const dist = haversineDistance(payload.lat, payload.lng, settings.officeLat, settings.officeLng);
-      if (dist > settings.officeRadiusMeters) {
-        return fail(
-          `Anda berada ${Math.round(dist)}m dari kantor. Absensi hanya dalam radius ${settings.officeRadiusMeters}m dari kantor (${settings.officeLat}, ${settings.officeLng}).`
-        ) as ApiResponse<Attendance>;
-      }
-    }
-
-    const att: Attendance = {
-      id: generateId('att'),
-      employeeId: session.employeeId,
-      date: today,
-      checkIn: checkInTime,
-      checkInLat: payload.lat,
-      checkInLng: payload.lng,
-      checkInPhoto: payload.photo,
-      status,
-      lateMinutes: lateMinutes > 0 ? lateMinutes : 0,
-      createdAt: now.toISOString(),
-    };
-    list.push(att);
-    db.setAttendances(list);
-    db.addLog({ userId: session.userId, userName: session.name, action: 'CHECK_IN', module: 'Attendance', details: `${status}${lateMinutes ? ` (${lateMinutes}m late)` : ''}` });
-    return ok(att, status === 'Late' ? `Check-in berhasil (Terlambat ${lateMinutes} menit)` : 'Check-in berhasil');
-  }
+  return await callAPI<Attendance>('checkin', {
+    lat: payload.lat || 0,
+    lng: payload.lng || 0,
+    photo: payload.photo || '',
+    faceDescriptor: payload.faceDescriptor || [],
+    faceVerified: payload.faceVerified || false,
+  });
 }
 
 export async function checkOut(payload: {
