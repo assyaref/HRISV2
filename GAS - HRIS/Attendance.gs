@@ -53,9 +53,30 @@ var AttendanceService = {
       employee.faceRegistered === true ||
       String(employee.faceRegistered).toLowerCase() === 'true';
 
-    // BYPASS SEMENTARA: Jika wajah belum terdaftar, lanjutkan dengan warning
     if (!isFaceRegistered || storedDescriptor.length === 0) {
-      Logger.log('WARNING: Face not registered, bypassing for employee: ' + session.employeeId);
+      return fail(
+        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID sebelum melakukan absensi.'
+      );
+    }
+
+    // 4. VERIFIKASI WAJAH
+    var faceVerifiedByClient = params.faceVerified === true || params.faceVerified === 'true';
+    var hasDescriptorFromClient = params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0;
+
+    if (!faceVerifiedByClient && !hasDescriptorFromClient) {
+      return fail('Verifikasi wajah diperlukan. Silakan ambil foto untuk verifikasi.');
+    }
+
+    if (hasDescriptorFromClient && storedDescriptor.length > 0) {
+      var similarity = calculateCosineSimilarity(params.faceDescriptor, storedDescriptor);
+      var threshold = faceVerifiedByClient ? 0.30 : 0.40;
+
+      if (similarity < threshold) {
+        return fail(
+          'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar (similarity: ' +
+          Math.round(similarity * 100) + '%, threshold: ' + Math.round(threshold * 100) + '%). Silakan ambil foto ulang atau daftarkan ulang wajah Anda.'
+        );
+      }
     }
 
     var now = new Date();
