@@ -664,7 +664,11 @@ export async function checkIn(payload: {
     }
 
     // 2. VERIFIKASI WAJAH DENGAN DATABASE
-    if (payload.photo) {
+    //    Jika faceVerified=true dari frontend, terima saja.
+    //    Jika photo tersedia, lakukan similarity check dengan threshold lebih rendah (0.40).
+    const faceVerifiedByClient = payload.faceVerified === true;
+    
+    if (payload.photo && !faceVerifiedByClient) {
       const faceRes = await verifyAttendanceFace(payload.photo);
       if (!faceRes.success || !faceRes.data?.match) {
         return fail(
@@ -737,7 +741,10 @@ export async function checkOut(payload: {
     }
 
     // 2. VERIFIKASI WAJAH DENGAN DATABASE
-    if (payload.photo) {
+    //    Jika faceVerified=true dari frontend, skip similarity check.
+    const faceVerifiedByClient2 = payload.faceVerified === true;
+    
+    if (payload.photo && !faceVerifiedByClient2) {
       const faceRes = await verifyAttendanceFace(payload.photo);
       if (!faceRes.success || !faceRes.data?.match) {
         return fail(
@@ -1286,8 +1293,24 @@ export async function checkGASHealth(): Promise<ApiResponse> {
 }
 
 // ========== FACE ENROLLMENT & VERIFICATION ==========
+
+/**
+ * Helper: Validasi apakah faceDescriptor benar-benar valid (bukan cuma faceRegistered=true)
+ * Mencegah inconsistent state: faceRegistered=true tapi descriptor kosong/rusak
+ */
+function isFaceEnrolled(employee: { faceDescriptor?: string; faceRegistered?: boolean } | null | undefined): boolean {
+  if (!employee) return false;
+  const desc = String(employee.faceDescriptor || '').trim();
+  return desc.length > 2 && desc !== '[]';
+}
+
 export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse> {
+  if (!faceDescriptor || faceDescriptor.length === 0) {
+    return fail('Data wajah tidak valid. Silakan ambil foto ulang.') as ApiResponse;
+  }
+
   try {
+    // Kirim descriptor sebagai array number, bukan string
     return await callAPI('enrollFace', { faceDescriptor });
   } catch {
     // Fallback ke localStorage
@@ -1299,12 +1322,17 @@ export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse>
     const idx = employees.findIndex((e) => e.id === session.employeeId);
     if (idx < 0) return fail('Karyawan tidak ditemukan') as ApiResponse;
 
-    employees[idx].faceDescriptor = JSON.stringify(faceDescriptor);
+    const descriptorJSON = JSON.stringify(faceDescriptor);
+    employees[idx].faceDescriptor = descriptorJSON;
     employees[idx].faceRegistered = true;
     db.setEmployees(employees);
-    db.addLog({ userId: session.userId, userName: session.name, action: 'ENROLL_FACE', module: 'Face Recognition', details: `Face enrolled for ${employees[idx].fullName}` });
+    db.addLog({ 
+      userId: session.userId, userName: session.name, 
+      action: 'ENROLL_FACE', module: 'Face Recognition', 
+      details: `Face enrolled for ${employees[idx].fullName} (descriptor: ${descriptorJSON.substring(0, 30)}...)`
+    });
     
-    return ok(null, 'Wajah berhasil didaftarkan');
+    return ok({ descriptorLength: faceDescriptor.length }, 'Wajah berhasil didaftarkan');
   }
 }
 
@@ -1314,12 +1342,23 @@ export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{
   if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as unknown as ApiResponse<{ match: boolean; similarity: number }>;
 
   const employee = db.getEmployeeById(session.employeeId);
-  if (!employee?.faceDescriptor) {
-    return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu.') as ApiResponse<{ match: boolean; similarity: number }>;
+  
+  // Validasi descriptor - konsisten dengan GAS UserService.gs
+  if (!isFaceEnrolled(employee)) {
+    return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu di menu Face ID.') as ApiResponse<{ match: boolean; similarity: number }>;
   }
 
-  // Decode enrolled descriptor
-  const enrolledDescriptor = JSON.parse(employee.faceDescriptor) as number[];
+  // Decode enrolled descriptor dengan try-catch
+  let enrolledDescriptor: number[];
+  try {
+    enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
+  } catch {
+    return fail('Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.') as ApiResponse<{ match: boolean; similarity: number }>;
+  }
+
+  if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
+    return fail('Data wajah tidak valid. Silakan daftarkan ulang.') as ApiResponse<{ match: boolean; similarity: number }>;
+  }
   
   // Verify face from photo
   const { verifyFaceFromBase64 } = await import('./faceRecognition');
@@ -1344,8 +1383,24 @@ export async function getFaceEnrollmentStatus(): Promise<ApiResponse<{ enrolled:
     const employee = db.getEmployeeById(session.employeeId);
     if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
 
+    // KRITIS: validasi descriptor, bukan cuma faceRegistered flag
+    // Konsisten dengan GAS UserService.gs getFaceStatus()
+    const enrolled = isFaceEnrolled(employee);
+
+    // Auto-healing: jika faceRegistered=true tapi descriptor kosong, reset flag
+    if (!enrolled && employee.faceRegistered) {
+      console.warn(`Auto-healing: ${employee.fullName} had faceRegistered=true but empty descriptor - resetting`);
+      const employees = db.getEmployees();
+      const idx = employees.findIndex((e) => e.id === employee.id);
+      if (idx >= 0) {
+        employees[idx].faceRegistered = false;
+        employees[idx].faceDescriptor = '';
+        db.setEmployees(employees);
+      }
+    }
+
     return ok({
-      enrolled: employee.faceRegistered || false,
+      enrolled,
       employeeName: employee.fullName,
     });
   }

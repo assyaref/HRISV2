@@ -192,17 +192,11 @@ var UserService = {
       }
     }
     
-    var empIdx = -1;
-    for (var i = 1; i < empData.length; i++) {
-      if (String(empData[i][empIdCol]).trim() === String(session.employeeId).trim()) {
-        empIdx = i;
-        break;
-      }
-    }
-
-    if (empIdx < 0) {
+    var employee = findEmployeeRow_(empSheet, session.employeeId);
+    if (!employee) {
       return fail('Karyawan tidak ditemukan dengan ID: ' + session.employeeId);
     }
+    var empIdx = employee.row;
 
     // Store face descriptor as JSON string in spreadsheet
     var descriptor = Array.isArray(params.faceDescriptor) ? params.faceDescriptor : [];
@@ -216,6 +210,10 @@ var UserService = {
     
     // Tulis kembali ke sheet - gunakan range yang sama dengan pembacaan
     empSheet.getRange(1, 1, lastRow, lastCol).setValues(empData);
+    
+    // Flush dan delay agar perubahan langsung terlihat oleh request berikutnya
+    SpreadsheetApp.flush();
+    Utilities.sleep(200);
     
     addLog(session.userId, session.name, 'ENROLL_FACE', 'Face Recognition', 
       'Face enrolled for employee ' + session.employeeId + ' (descriptor length: ' + descriptor.length + ')');
@@ -231,56 +229,34 @@ var UserService = {
     var empSheet = getSheet('EMPLOYEE');
     ensureFaceColumns_(empSheet);
     
-    // Baca data dengan range eksplisit untuk menghindari array jagged
-    var lastCol = empSheet.getLastColumn();
-    var lastRow = empSheet.getLastRow();
-    if (lastRow < 2) lastRow = 2;
-    
-    var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
-    var empHeaders = empData[0];
-    var empIdCol = empHeaders.indexOf('id');
-    var faceDescCol = empHeaders.indexOf('faceDescriptor');
-    var faceRegCol = empHeaders.indexOf('faceRegistered');
-    var nameCol = empHeaders.indexOf('fullName');
-    
-    // Normalize rows untuk mencegah array jagged
-    var numCols = empHeaders.length;
-    for (var r = 0; r < empData.length; r++) {
-      while (empData[r].length < numCols) {
-        empData[r].push('');
-      }
+    var employee = findEmployeeRow_(empSheet, session.employeeId);
+    if (!employee) {
+      return fail('Karyawan tidak ditemukan.');
     }
 
-    var fixedInconsistency = false;
-    for (var i = 1; i < empData.length; i++) {
-      if (String(empData[i][empIdCol]).trim() === String(session.employeeId).trim()) {
-        var descriptorText = String(empData[i][faceDescCol] || '').trim();
-        var faceRegVal = String(empData[i][faceRegCol] || '').trim().toLowerCase();
-        var isEnrolled = descriptorText.length > 2 && descriptorText !== '[]';
-        
-        // AUTO-HEALING: jika faceRegistered=true tapi descriptor kosong/rusak, reset flag
-        if (faceRegVal === 'true' && !isEnrolled) {
-          empData[i][faceRegCol] = 'false';
-          empData[i][faceDescCol] = '';
-          fixedInconsistency = true;
-          addLog(session.userId, session.name, 'AUTO_FIX', 'Face Recognition', 
-            'Auto-fixed inconsistent face data for ' + String(empData[i][nameCol] || session.employeeId) + ' (faceRegistered=true but descriptor empty)');
-        }
-        
-        // Simpan perubahan jika ada auto-healing
-        if (fixedInconsistency) {
-          empSheet.getRange(1, 1, lastRow, lastCol).setValues(empData);
-        }
-        
-        return ok({
-          enrolled: isEnrolled,
-          employeeName: empData[i][nameCol] || '',
-          autoFixed: fixedInconsistency
-        });
-      }
+    var enrolled = employee.registered && employee.descriptor.length > 0;
+    
+    // AUTO-HEALING: jika faceRegistered=true tapi descriptor kosong/rusak, reset flag
+    if (employee.registered && !enrolled) {
+      var lastCol = empSheet.getLastColumn();
+      var lastRow = empSheet.getLastRow();
+      if (lastRow < 2) lastRow = 2;
+      var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
+      empData[employee.row][employee.faceRegCol] = 'false';
+      empData[employee.row][employee.faceDescCol] = '';
+      empSheet.getRange(1, 1, lastRow, lastCol).setValues(empData);
+      SpreadsheetApp.flush();
+      Utilities.sleep(200);
+      addLog(session.userId, session.name, 'AUTO_FIX', 'Face Recognition', 
+        'Auto-fixed inconsistent face data for ' + session.employeeId + ' (faceRegistered=true but descriptor empty)');
+      enrolled = false;
     }
 
-    return fail('Karyawan tidak ditemukan');
+    return ok({
+      enrolled: enrolled,
+      employeeName: '',
+      autoFixed: false
+    });
   },
 
   verifyFace: function (params, session) {
@@ -291,74 +267,41 @@ var UserService = {
     var empSheet = getSheet('EMPLOYEE');
     ensureFaceColumns_(empSheet);
     
-    // Baca data dengan range eksplisit untuk menghindari array jagged
-    var lastCol = empSheet.getLastColumn();
-    var lastRow = empSheet.getLastRow();
-    if (lastRow < 2) lastRow = 2;
-    
-    var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
-    var empHeaders = empData[0];
-    var empIdCol = empHeaders.indexOf('id');
-    var faceDescCol = empHeaders.indexOf('faceDescriptor');
-    var faceRegCol = empHeaders.indexOf('faceRegistered');
-    
-    // Normalize rows
-    var numCols = empHeaders.length;
-    for (var r = 0; r < empData.length; r++) {
-      while (empData[r].length < numCols) {
-        empData[r].push('');
-      }
+    var employee = findEmployeeRow_(empSheet, session.employeeId);
+    if (!employee) {
+      return fail('Karyawan tidak ditemukan.');
     }
 
-    for (var i = 1; i < empData.length; i++) {
-      if (String(empData[i][empIdCol]).trim() === String(session.employeeId).trim()) {
-        // Check if face is registered
-        var faceDescriptorText = String(empData[i][faceDescCol] || '').trim();
-        var faceRegistered = faceDescriptorText.length > 2 && faceDescriptorText !== '[]';
-        if (!faceRegistered) {
-          return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu.');
-        }
-
-        var enrolledJSON = empData[i][faceDescCol] || '[]';
-        var enrolledDescriptor;
-        try {
-          enrolledDescriptor = JSON.parse(enrolledJSON);
-        } catch (e) {
-          return fail('Data wajah rusak. Silakan daftarkan ulang.');
-        }
-        
-        if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-          return fail('Data wajah tidak valid. Silakan daftarkan ulang.');
-        }
-
-        // If frontend sends a face descriptor, compare it with stored one
-        if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-          var similarity = calculateCosineSimilarity(params.faceDescriptor, enrolledDescriptor);
-          var threshold = CONFIG.FACE_SIMILARITY_THRESHOLD || 0.65;
-          
-          return ok({
-            match: similarity >= threshold,
-            similarity: Math.round(similarity * 100)
-          });
-        }
-
-        // If frontend sends pre-computed match result, just verify face exists
-        if (params.faceVerified === true || params.faceVerified === 'true') {
-          return ok({
-            match: true,
-            similarity: 100
-          });
-        }
-
-        // Default: face is registered
-        return ok({
-          match: true,
-          similarity: 100
-        });
-      }
+    if (!employee.registered || employee.descriptor.length === 0) {
+      return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu.');
     }
 
-    return fail('Karyawan tidak ditemukan');
+    var enrolledDescriptor = employee.descriptor;
+
+    // If frontend sends a face descriptor, compare it with stored one
+    if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
+      var similarity = calculateCosineSimilarity(params.faceDescriptor, enrolledDescriptor);
+      var threshold = CONFIG.FACE_SIMILARITY_THRESHOLD || 0.65;
+      
+      return ok({
+        match: similarity >= threshold,
+        similarity: Math.round(similarity * 100)
+      });
+    }
+
+    // If frontend sends pre-computed match result, just verify face exists
+    if (params.faceVerified === true || params.faceVerified === 'true') {
+      return ok({
+        match: true,
+        similarity: 100
+      });
+    }
+
+    // Default: face is registered
+    return ok({
+      match: true,
+      similarity: 100
+    });
   }
 };
 
@@ -380,6 +323,55 @@ function ensureFaceColumns_(sheet) {
     changed = true;
   }
   return changed;
+}
+
+/**
+ * Cari employee row berdasarkan ID atau employeeId.
+ * Mencegah bug lookup ketika session.employeeId = "EMP001"
+ * tapi kolom id berisi "emp_xxxxx".
+ */
+function findEmployeeRow_(sheet, employeeKey) {
+  ensureFaceColumns_(sheet);
+
+  var lastRow = sheet.getLastRow();
+  var lastCol = sheet.getLastColumn();
+  if (lastRow < 2) lastRow = 2;
+
+  var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var headers = values[0];
+
+  var idCol = headers.indexOf('id');
+  var employeeIdCol = headers.indexOf('employeeId');
+  var faceDescCol = headers.indexOf('faceDescriptor');
+  var faceRegCol = headers.indexOf('faceRegistered');
+
+  employeeKey = String(employeeKey).trim();
+
+  for (var i = 1; i < values.length; i++) {
+    var id = idCol >= 0 ? String(values[i][idCol]).trim() : "";
+    var emp = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim() : "";
+
+    if (id === employeeKey || emp === employeeKey) {
+      var descriptor = [];
+      try {
+        descriptor = JSON.parse(values[i][faceDescCol] || "[]");
+      } catch (e) {
+        descriptor = [];
+      }
+
+      return {
+        row: i,
+        values: values,
+        headers: headers,
+        faceDescCol: faceDescCol,
+        faceRegCol: faceRegCol,
+        descriptor: descriptor,
+        registered: String(values[i][faceRegCol]).toLowerCase() == "true"
+      };
+    }
+  }
+
+  return null;
 }
 
 /**

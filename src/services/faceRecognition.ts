@@ -318,7 +318,7 @@ export function captureAndEnroll(video: HTMLVideoElement): FaceValidationResult 
 export function verifyFace(
   selfieCanvas: HTMLCanvasElement,
   enrolledDescriptor: number[],
-  threshold = 0.65
+  threshold = 0.40
 ): FaceMatchResult {
   // 1. Validasi selfie
   const validation = validateFace(selfieCanvas);
