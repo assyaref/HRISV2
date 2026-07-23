@@ -251,13 +251,31 @@ var UserService = {
       }
     }
 
+    var fixedInconsistency = false;
     for (var i = 1; i < empData.length; i++) {
       if (String(empData[i][empIdCol]).trim() === String(session.employeeId).trim()) {
         var descriptorText = String(empData[i][faceDescCol] || '').trim();
+        var faceRegVal = String(empData[i][faceRegCol] || '').trim().toLowerCase();
         var isEnrolled = descriptorText.length > 2 && descriptorText !== '[]';
+        
+        // AUTO-HEALING: jika faceRegistered=true tapi descriptor kosong/rusak, reset flag
+        if (faceRegVal === 'true' && !isEnrolled) {
+          empData[i][faceRegCol] = 'false';
+          empData[i][faceDescCol] = '';
+          fixedInconsistency = true;
+          addLog(session.userId, session.name, 'AUTO_FIX', 'Face Recognition', 
+            'Auto-fixed inconsistent face data for ' + String(empData[i][nameCol] || session.employeeId) + ' (faceRegistered=true but descriptor empty)');
+        }
+        
+        // Simpan perubahan jika ada auto-healing
+        if (fixedInconsistency) {
+          empSheet.getRange(1, 1, lastRow, lastCol).setValues(empData);
+        }
+        
         return ok({
           enrolled: isEnrolled,
-          employeeName: empData[i][nameCol] || ''
+          employeeName: empData[i][nameCol] || '',
+          autoFixed: fixedInconsistency
         });
       }
     }
