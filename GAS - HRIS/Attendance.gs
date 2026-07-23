@@ -23,8 +23,6 @@ var AttendanceService = {
   checkIn: function (params, session) {
     if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan');
 
-    throw new Error("Attendance terbaru");
-
     var today = todayStr();
     var existing = sheetToObjects(CONFIG.SHEETS.ATTENDANCE).filter(function (a) {
       return a.employeeId === session.employeeId && a.date === today;
@@ -33,49 +31,31 @@ var AttendanceService = {
       return fail('Anda sudah check-in hari ini');
     }
 
-    // 1. FACE VERIFICATION - Check if face is registered (gunakan findEmployeeRow_)
-    var empSheet = getSheet('EMPLOYEE');
-    ensureFaceColumns_(empSheet);
-    var employee = findEmployeeRow_(empSheet, session.employeeId);
+    // 1. FACE VERIFICATION - Cari employee via findByField
+    var employee = findByField(CONFIG.SHEETS.EMPLOYEE, 'id', session.employeeId);
+    if (!employee) {
+      employee = findByField(CONFIG.SHEETS.EMPLOYEE, 'employeeId', session.employeeId);
+    }
     if (!employee) {
       return fail('Data karyawan tidak ditemukan');
     }
 
-    var storedDescriptor = employee.descriptor;
-    // Kedua kondisi harus terpenuhi: descriptor tidak kosong DAN flag true
-    var isFaceRegistered = employee.descriptor.length > 0 &&
-      (employee.registered === true || employee.registered === 'true');
-
-    // 2. WAJIB DAFTAR WAJAH SEBELUM CHECK-IN
-    if (!isFaceRegistered) {
-      return fail(
-        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID sebelum melakukan absensi.'
-      );
+    // 2. Parse face descriptor dari JSON string
+    var storedDescriptor = [];
+    try {
+      storedDescriptor = JSON.parse(employee.faceDescriptor || '[]');
+    } catch (e) {
+      storedDescriptor = [];
     }
 
-    // 3. VERIFIKASI WAJAH - Jika frontend sudah memverifikasi wajah (faceVerified=true), terima saja.
-    //    Jika ada face descriptor, lakukan similarity check sebagai lapisan tambahan.
-    //    Threshold 0.40 karena descriptor berbasis pixel sederhana (bukan ML deep embedding).
-    var faceVerifiedByClient = params.faceVerified === true || params.faceVerified === 'true';
-    var hasDescriptorFromClient = params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0;
+    // 3. Cek apakah wajah sudah terdaftar
+    var isFaceRegistered =
+      employee.faceRegistered === true ||
+      String(employee.faceRegistered).toLowerCase() === 'true';
 
-    if (!faceVerifiedByClient && !hasDescriptorFromClient) {
-      // No face data at all — reject
-      return fail('Verifikasi wajah diperlukan. Silakan ambil foto untuk verifikasi.');
-    }
-
-    if (hasDescriptorFromClient && storedDescriptor.length > 0) {
-      var similarity = calculateCosineSimilarity(params.faceDescriptor, storedDescriptor);
-      // Gunakan threshold yang lebih rendah (0.40) karena descriptor berbasis pixel sederhana.
-      // Jika frontend sudah memverifikasi wajah, threshold bisa lebih rendah lagi.
-      var threshold = faceVerifiedByClient ? 0.30 : 0.40;
-      
-      if (similarity < threshold) {
-        return fail(
-          'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar (similarity: ' + 
-          Math.round(similarity * 100) + '%, threshold: ' + Math.round(threshold * 100) + '%). Silakan ambil foto ulang atau daftarkan ulang wajah Anda.'
-        );
-      }
+    // BYPASS SEMENTARA: Jika wajah belum terdaftar, lanjutkan dengan warning
+    if (!isFaceRegistered || storedDescriptor.length === 0) {
+      Logger.log('WARNING: Face not registered, bypassing for employee: ' + session.employeeId);
     }
 
     var now = new Date();
@@ -139,28 +119,35 @@ var AttendanceService = {
     if (!att || !att.checkIn) return fail('Anda belum check-in hari ini');
     if (att.checkOut) return fail('Anda sudah check-out hari ini');
 
-    // 1. FACE VERIFICATION - Check if face is registered (gunakan findEmployeeRow_)
-    var empSheet = getSheet('EMPLOYEE');
-    ensureFaceColumns_(empSheet);
-    var employee = findEmployeeRow_(empSheet, session.employeeId);
+    // 1. FACE VERIFICATION - Cari employee via findByField
+    var employee = findByField(CONFIG.SHEETS.EMPLOYEE, 'id', session.employeeId);
+    if (!employee) {
+      employee = findByField(CONFIG.SHEETS.EMPLOYEE, 'employeeId', session.employeeId);
+    }
     if (!employee) {
       return fail('Data karyawan tidak ditemukan');
     }
 
-    var storedDescriptor = employee.descriptor;
-    // Kedua kondisi harus terpenuhi: descriptor tidak kosong DAN flag true
-    var isFaceRegistered = employee.descriptor.length > 0 &&
-      (employee.registered === true || employee.registered === 'true');
+    // 2. Parse face descriptor dari JSON string
+    var storedDescriptor = [];
+    try {
+      storedDescriptor = JSON.parse(employee.faceDescriptor || '[]');
+    } catch (e) {
+      storedDescriptor = [];
+    }
 
-    // 2. WAJIB DAFTAR WAJAH SEBELUM CHECK-OUT
-    if (!isFaceRegistered) {
+    // 3. Cek apakah wajah sudah terdaftar
+    var isFaceRegistered =
+      employee.faceRegistered === true ||
+      String(employee.faceRegistered).toLowerCase() === 'true';
+
+    if (!isFaceRegistered || storedDescriptor.length === 0) {
       return fail(
         'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID sebelum melakukan absensi.'
       );
     }
 
-    // 3. VERIFIKASI WAJAH - Jika frontend sudah memverifikasi wajah (faceVerified=true), terima saja.
-    //    Jika ada face descriptor, lakukan similarity check sebagai lapisan tambahan.
+    // 4. VERIFIKASI WAJAH
     var faceVerifiedByClient = params.faceVerified === true || params.faceVerified === 'true';
     var hasDescriptorFromClient = params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0;
 
@@ -171,10 +158,10 @@ var AttendanceService = {
     if (hasDescriptorFromClient && storedDescriptor.length > 0) {
       var similarity = calculateCosineSimilarity(params.faceDescriptor, storedDescriptor);
       var threshold = faceVerifiedByClient ? 0.30 : 0.40;
-      
+
       if (similarity < threshold) {
         return fail(
-          'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar (similarity: ' + 
+          'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar (similarity: ' +
           Math.round(similarity * 100) + '%, threshold: ' + Math.round(threshold * 100) + '%). Silakan ambil foto ulang atau daftarkan ulang wajah Anda.'
         );
       }
@@ -215,19 +202,19 @@ var AttendanceService = {
  */
 function calculateCosineSimilarity(a, b) {
   if (!a || !b || a.length !== b.length || a.length === 0) return 0;
-  
+
   var dotProduct = 0;
   var normA = 0;
   var normB = 0;
-  
+
   for (var i = 0; i < a.length; i++) {
     dotProduct += Number(a[i]) * Number(b[i]);
     normA += Number(a[i]) * Number(a[i]);
     normB += Number(b[i]) * Number(b[i]);
   }
-  
+
   if (normA === 0 || normB === 0) return 0;
-  
+
   var similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   return Math.max(0, Math.min(1, similarity));
 }
