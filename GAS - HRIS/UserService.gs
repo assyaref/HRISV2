@@ -1,6 +1,18 @@
 /**
- * UserService.gs - User Management & Face Recognition
- * Handles CRUD operations for users and face enrollment
+ * UserService.gs - User Management
+ * 
+ * PERUBAHAN: Face Recognition dipindah ke FaceService.gs (terpusat).
+ * Semua method face recognition di sini adalah delegasi ke FaceService.
+ * 
+ * Alasan refactor:
+ * - Menghindari duplikasi kode (sebelumnya ada di UserService.gs DAN Attendance.gs)
+ * - Konsistensi validasi descriptor (128 angka + normalisasi)
+ * - FaceService bisa digunakan oleh module lain (Attendance, Admin, dll)
+ * 
+ * Mapping:
+ * - UserService.enrollFace     -> FaceService.enroll(params, session)
+ * - UserService.getFaceStatus  -> FaceService.getStatus(session)
+ * - UserService.verifyFace     -> FaceService.verifyForAttendance(params, session)
  */
 
 var UserService = {
@@ -152,248 +164,56 @@ var UserService = {
     return fail('User tidak ditemukan');
   },
 
-  // Face Recognition
+  // ========== FACE RECOGNITION (delegasi ke FaceService) ==========
+
+  /**
+   * Daftarkan wajah untuk absensi.
+   * Delegasi ke FaceService.enroll() untuk konsistensi.
+   */
   enrollFace: function (params, session) {
-    if (!session.employeeId) {
+    if (!session || !session.employeeId) {
       return fail('Akun tidak terhubung ke data karyawan');
     }
 
-    var empSheet = getSheet('EMPLOYEE');
-    
-    // Pastikan kolom face ada. Jika baru ditambahkan, isi semua baris dengan string kosong.
-    var headersBefore = empSheet.getRange(1, 1, 1, empSheet.getLastColumn()).getValues()[0];
-    var needsFaceCols = headersBefore.indexOf('faceDescriptor') < 0 || headersBefore.indexOf('faceRegistered') < 0;
-    ensureFaceColumns_(empSheet);
-    
-    // Re-read data AFTER ensuring columns exist.
-    // CRITICAL: after ensureFaceColumns_ added new columns, getDataRange() may still
-    // return old column count if no data exists below the new headers. We force the
-    // range to include all header columns by reading the full header row first.
-    var lastCol = empSheet.getLastColumn();
-    var lastRow = empSheet.getLastRow();
-    if (lastRow < 2) lastRow = 2; // minimal ada header + 1 baris kosong agar range valid
-    
-    var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
-    var empHeaders = empData[0];
-    var empIdCol = empHeaders.indexOf('id');
-    var faceDescCol = empHeaders.indexOf('faceDescriptor');
-    var faceRegCol = empHeaders.indexOf('faceRegistered');
-    
-    // Safety check - pastikan kolom face ada
-    if (faceDescCol < 0 || faceRegCol < 0) {
-      return fail('Kolom faceDescriptor/faceRegistered tidak ditemukan. Jalankan migrasi terlebih dahulu.');
-    }
-    
-    // Normalize semua baris ke jumlah kolom yang sama (cegah array jagged)
-    var numCols = empHeaders.length;
-    for (var r = 0; r < empData.length; r++) {
-      while (empData[r].length < numCols) {
-        empData[r].push('');
-      }
-    }
-    
-    var employee = findEmployeeRow_(empSheet, session.employeeId);
-    if (!employee) {
-      return fail('Karyawan tidak ditemukan dengan ID: ' + session.employeeId);
-    }
-    var empIdx = employee.row;
-
-    // Store face descriptor as JSON string in spreadsheet
-    var descriptor = Array.isArray(params.faceDescriptor) ? params.faceDescriptor : [];
-    if (descriptor.length === 0) {
-      return fail('Data wajah tidak valid (descriptor kosong). Silakan ambil foto ulang.');
-    }
-    
-    var descriptorJSON = JSON.stringify(descriptor);
-    empData[empIdx][faceDescCol] = descriptorJSON;
-    empData[empIdx][faceRegCol] = 'true';
-    
-    // Tulis kembali ke sheet - gunakan range yang sama dengan pembacaan
-    empSheet.getRange(1, 1, lastRow, lastCol).setValues(empData);
-    
-    // Flush dan delay agar perubahan langsung terlihat oleh request berikutnya
-    SpreadsheetApp.flush();
-    Utilities.sleep(200);
-    
-    addLog(session.userId, session.name, 'ENROLL_FACE', 'Face Recognition', 
-      'Face enrolled for employee ' + session.employeeId + ' (descriptor length: ' + descriptor.length + ')');
-    
-    return ok({ descriptorLength: descriptor.length }, 'Wajah berhasil didaftarkan (' + descriptor.length + ' data points)');
+    return FaceService.enroll(params, session);
   },
 
+  /**
+   * Cek status pendaftaran wajah.
+   * Delegasi ke FaceService.getStatus() untuk konsistensi.
+   */
   getFaceStatus: function (params, session) {
-    if (!session.employeeId) {
+    if (!session || !session.employeeId) {
       return fail('Akun tidak terhubung ke data karyawan');
     }
 
-    var empSheet = getSheet('EMPLOYEE');
-    ensureFaceColumns_(empSheet);
-    
-    var employee = findEmployeeRow_(empSheet, session.employeeId);
-    if (!employee) {
-      return fail('Karyawan tidak ditemukan.');
-    }
-
-    var enrolled = employee.registered && employee.descriptor.length > 0;
-    
-    // AUTO-HEALING: jika faceRegistered=true tapi descriptor kosong/rusak, reset flag
-    if (employee.registered && !enrolled) {
-      var lastCol = empSheet.getLastColumn();
-      var lastRow = empSheet.getLastRow();
-      if (lastRow < 2) lastRow = 2;
-      var empData = empSheet.getRange(1, 1, lastRow, lastCol).getValues();
-      empData[employee.row][employee.faceRegCol] = 'false';
-      empData[employee.row][employee.faceDescCol] = '';
-      empSheet.getRange(1, 1, lastRow, lastCol).setValues(empData);
-      SpreadsheetApp.flush();
-      Utilities.sleep(200);
-      addLog(session.userId, session.name, 'AUTO_FIX', 'Face Recognition', 
-        'Auto-fixed inconsistent face data for ' + session.employeeId + ' (faceRegistered=true but descriptor empty)');
-      enrolled = false;
-    }
-
-    return ok({
-      enrolled: enrolled,
-      employeeName: '',
-      autoFixed: false
-    });
+    return FaceService.getStatus(session);
   },
 
+  /**
+   * Verifikasi wajah untuk absensi.
+   * Delegasi ke FaceService.verifyForAttendance() untuk konsistensi.
+   */
   verifyFace: function (params, session) {
-    if (!session.employeeId) {
+    if (!session || !session.employeeId) {
       return fail('Akun tidak terhubung ke data karyawan');
     }
 
-    var empSheet = getSheet('EMPLOYEE');
-    ensureFaceColumns_(empSheet);
-    
-    var employee = findEmployeeRow_(empSheet, session.employeeId);
-    if (!employee) {
-      return fail('Karyawan tidak ditemukan.');
+    var result = FaceService.verifyForAttendance(params, session);
+    if (!result.success) {
+      // Map error codes ke format response UserService
+      if (result.code === 'FACE_NOT_REGISTERED') {
+        return fail(result.message);
+      }
+      if (result.code === 'FACE_NOT_MATCH') {
+        return fail(result.message);
+      }
+      return fail(result.message);
     }
 
-    if (!employee.registered || employee.descriptor.length === 0) {
-      return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu.');
-    }
-
-    var enrolledDescriptor = employee.descriptor;
-
-    // If frontend sends a face descriptor, compare it with stored one
-    if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-      var similarity = calculateCosineSimilarity(params.faceDescriptor, enrolledDescriptor);
-      var threshold = CONFIG.FACE_SIMILARITY_THRESHOLD || 0.65;
-      
-      return ok({
-        match: similarity >= threshold,
-        similarity: Math.round(similarity * 100)
-      });
-    }
-
-    // If frontend sends pre-computed match result, just verify face exists
-    if (params.faceVerified === true || params.faceVerified === 'true') {
-      return ok({
-        match: true,
-        similarity: 100
-      });
-    }
-
-    // Default: face is registered
     return ok({
-      match: true,
-      similarity: 100
-    });
+      match: result.match,
+      similarity: result.similarity || 100
+    }, result.message);
   }
 };
-
-/**
- * Pastikan instalasi spreadsheet lama sudah memiliki kolom Face ID.
- * Dipanggil dari semua endpoint Face ID agar migrasi manual tidak wajib.
- */
-function ensureFaceColumns_(sheet) {
-  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  var changed = false;
-
-  if (headers.indexOf('faceDescriptor') < 0) {
-    sheet.getRange(1, sheet.getLastColumn() + 1).setValue('faceDescriptor');
-    changed = true;
-  }
-  headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  if (headers.indexOf('faceRegistered') < 0) {
-    sheet.getRange(1, sheet.getLastColumn() + 1).setValue('faceRegistered');
-    changed = true;
-  }
-  return changed;
-}
-
-/**
- * Cari employee row berdasarkan ID atau employeeId.
- * Mencegah bug lookup ketika session.employeeId = "EMP001"
- * tapi kolom id berisi "emp_xxxxx".
- */
-function findEmployeeRow_(sheet, employeeKey) {
-  ensureFaceColumns_(sheet);
-
-  var lastRow = sheet.getLastRow();
-  var lastCol = sheet.getLastColumn();
-  if (lastRow < 2) lastRow = 2;
-
-  var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
-  var headers = values[0];
-
-  var idCol = headers.indexOf('id');
-  var employeeIdCol = headers.indexOf('employeeId');
-  var faceDescCol = headers.indexOf('faceDescriptor');
-  var faceRegCol = headers.indexOf('faceRegistered');
-
-  employeeKey = String(employeeKey).trim();
-
-  for (var i = 1; i < values.length; i++) {
-    var id = idCol >= 0 ? String(values[i][idCol]).trim() : "";
-    var emp = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim() : "";
-
-    if (id === employeeKey || emp === employeeKey) {
-      var descriptor = [];
-      try {
-        descriptor = JSON.parse(values[i][faceDescCol] || "[]");
-      } catch (e) {
-        descriptor = [];
-      }
-
-      return {
-        row: i,
-        values: values,
-        headers: headers,
-        faceDescCol: faceDescCol,
-        faceRegCol: faceRegCol,
-        descriptor: descriptor,
-        registered: String(values[i][faceRegCol]).toLowerCase() == "true"
-      };
-    }
-  }
-
-  return null;
-}
-
-/**
- * Calculate cosine similarity between two face descriptor arrays
- * Range: 0 (berbeda) - 1 (identik)
- */
-function calculateCosineSimilarity(a, b) {
-  if (!a || !b || a.length !== b.length || a.length === 0) return 0;
-  
-  var dotProduct = 0;
-  var normA = 0;
-  var normB = 0;
-  
-  for (var i = 0; i < a.length; i++) {
-    dotProduct += Number(a[i]) * Number(b[i]);
-    normA += Number(a[i]) * Number(a[i]);
-    normB += Number(b[i]) * Number(b[i]);
-  }
-  
-  if (normA === 0 || normB === 0) return 0;
-  
-  var similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  // Clamp between 0-1
-  return Math.max(0, Math.min(1, similarity));
-}
