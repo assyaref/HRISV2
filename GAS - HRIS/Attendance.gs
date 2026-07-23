@@ -34,7 +34,8 @@ var AttendanceService = {
       return fail('Anda sudah check-in hari ini');
     }
 
-    // FACE VERIFICATION - menggunakan FaceService terpusat
+    // FACE VERIFICATION - menggunakan FaceService terpusat (multi-strategy lookup)
+    // Session.email digunakan sebagai fallback jika session.employeeId tidak match dengan EMPLOYEE sheet
     var faceResult = FaceService.verifyForAttendance(params, session);
     if (!faceResult.success) {
       return fail(faceResult.message);

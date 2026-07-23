@@ -168,11 +168,14 @@ var UserService = {
 
   /**
    * Daftarkan wajah untuk absensi.
+   * FIX: Tidak guard session.employeeId karena FaceService.enroll 
+   * melakukan multi-strategy lookup (employeeId + email fallback).
+   * 
    * Delegasi ke FaceService.enroll() untuk konsistensi.
    */
   enrollFace: function (params, session) {
-    if (!session || !session.employeeId) {
-      return fail('Akun tidak terhubung ke data karyawan');
+    if (!session) {
+      return fail('Sesi tidak valid');
     }
 
     return FaceService.enroll(params, session);
@@ -180,11 +183,13 @@ var UserService = {
 
   /**
    * Cek status pendaftaran wajah.
+   * FIX: Tidak guard session.employeeId - FaceService punya fallback email lookup.
+   * 
    * Delegasi ke FaceService.getStatus() untuk konsistensi.
    */
   getFaceStatus: function (params, session) {
-    if (!session || !session.employeeId) {
-      return fail('Akun tidak terhubung ke data karyawan');
+    if (!session) {
+      return fail('Sesi tidak valid');
     }
 
     return FaceService.getStatus(session);
@@ -192,11 +197,13 @@ var UserService = {
 
   /**
    * Verifikasi wajah untuk absensi.
+   * FIX: Tidak guard session.employeeId - FaceService punya fallback email lookup.
+   * 
    * Delegasi ke FaceService.verifyForAttendance() untuk konsistensi.
    */
   verifyFace: function (params, session) {
-    if (!session || !session.employeeId) {
-      return fail('Akun tidak terhubung ke data karyawan');
+    if (!session) {
+      return fail('Sesi tidak valid');
     }
 
     var result = FaceService.verifyForAttendance(params, session);

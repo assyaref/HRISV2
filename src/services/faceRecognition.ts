@@ -42,26 +42,27 @@ function extractFaceDescriptor(canvas: HTMLCanvasElement): number[] | null {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
 
-  const width = 64; // Resize ke ukuran kecil untuk performa
-  const height = 64;
+  const width = 128; // Naikkan resolusi agar lebih banyak detail wajah
+  const height = 128;
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = width;
   tempCanvas.height = height;
   const tempCtx = tempCanvas.getContext('2d');
   if (!tempCtx) return null;
 
-  // Resize gambar ke 64x64
+  // Resize gambar ke 128x128 untuk mendapatkan detail lebih banyak
   tempCtx.drawImage(canvas, 0, 0, width, height);
   const imageData = tempCtx.getImageData(0, 0, width, height);
   const pixels = imageData.data;
 
   const descriptor: number[] = [];
 
-  // 1. Ekstraksi warna kulit (skin tone histogram)
+  // 1. Ekstraksi warna kulit (skin tone histogram) - threshold lebih toleran untuk low-light
   let skinR = 0, skinG = 0, skinB = 0, skinCount = 0;
   for (let i = 0; i < pixels.length; i += 4) {
     const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-    const isSkin = r > 95 && g > 40 && b > 20 && r > g && r > b && Math.abs(r - g) > 15;
+    // Longgarkan threshold untuk low-light: turunkan R dari 95 ke 70
+    const isSkin = r > 70 && g > 35 && b > 18 && r > g && r > b && Math.abs(r - g) > 10;
     if (isSkin) {
       skinR += r; skinG += g; skinB += b; skinCount++;
     }
@@ -232,7 +233,7 @@ export function validateFace(canvas: HTMLCanvasElement): FaceValidationResult {
   // Camera previews often have mild compression/noise, especially on mobile.
   // Keep rejecting genuinely flat/blurred frames, but do not reject a sharp
   // face merely because the preview has been downsampled by the browser.
-  const isBlurry = avgBlur < 7;
+  const isBlurry = avgBlur < 5; // Lebih toleran terhadap blur dari kamera depan
 
   // Face position
   let facePosition: FaceValidationResult['details']['facePosition'] = 'center';
@@ -249,8 +250,8 @@ export function validateFace(canvas: HTMLCanvasElement): FaceValidationResult {
   if (hasFace) confidence += 40;
   if (!isBlurry) confidence += 20;
   // More lenient brightness check for confidence
-  if (avgBrightness > 25 && avgBrightness < 220) confidence += 15;
-  if (skinRatio > 0.08 && skinRatio < 0.35) confidence += 15;
+  if (avgBrightness > 15 && avgBrightness < 240) confidence += 15; // Range lebih lebar
+  if (skinRatio > 0.06 && skinRatio < 0.40) confidence += 15; // Range lebih lebar
   if (facePosition === 'center') confidence += 10;
 
   // Ekstrak face descriptor jika wajah terdeteksi

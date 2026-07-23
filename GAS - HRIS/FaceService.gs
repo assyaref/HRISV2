@@ -1,68 +1,46 @@
 /**
  * FaceService.gs - Centralized Face Recognition Module
  * 
- * Menggabungkan pattern terbaik dari faceenrollment.txt dan faceverification.txt
- * dengan struktur project yang sudah ada (employeeId + faceDescriptor/faceRegistered).
+ * FIX v3.0 - Comprehensive fix for "Face Not Registered" bug
+ * =========================================================
+ * ROOT CAUSE: session.employeeId (from USERS sheet, e.g. "3233") 
+ * doesn't match employeeId in EMPLOYEE sheet (e.g. "EMP12346") 
+ * where face descriptor is stored.
  * 
- * PERUBAHAN KRITIS:
- * - TIDAK memaksa DESCRIPTOR_LENGTH=128 seperti file attached, karena frontend
- *   menggunakan lightweight Canvas pixel analysis (~70 elemen, bukan face-api.js).
- * - Strict 128-length validation menyebabkan "wajah tidak terbaca saat check-in".
- * - Normalisasi hanya validasi: array tidak kosong, semua elemen adalah angka finite.
- * - Panjang descriptor dibiarkan dinamis sesuai implementasi frontend.
+ * SOLUTION: Multi-strategy lookup + auto-healing:
+ * 1. Lookup by employeeId (default)
+ * 2. Lookup by id column (internal ID)
+ * 3. Lookup by email (cross-reference between session and EMPLOYEE sheet)
+ * 4. Lookup by nik (NIK column)
+ * 
+ * Plus: store resolved employeeId back to session for future use.
  */
 
 var FaceService = {
-  // Threshold untuk cosine similarity (0-1)
   CONFIG: {
     COSINE_THRESHOLD: 0.65,
-    COSINE_THRESHOLD_LOW: 0.30 // Untuk faceVerified=true dari client
+    COSINE_THRESHOLD_LOW: 0.30
   },
 
   /**
-   * Validasi dan normalisasi face descriptor dari input apapun.
-   * 
-   * KRITIS: Tidak memaksa panjang tertentu! Frontend menggunakan
-   * Canvas pixel analysis yang menghasilkan ~70 elemen, bukan 128.
-   * Hanya validasi: array, angka finite, tidak kosong.
-   * 
-   * @param {any} value - bisa array, JSON string, atau null
-   * @returns {number[]|null} array angka atau null jika invalid
+   * Normalize face descriptor - accept ANY format
    */
   normalizeDescriptor: function (value) {
     var descriptor = value;
-
-    // Parse dari JSON string jika perlu
     if (typeof descriptor === 'string') {
       try { descriptor = JSON.parse(descriptor); }
       catch (err) { return null; }
     }
-
-    // Harus array
     if (!Array.isArray(descriptor)) return null;
-
-    // Harus array of numbers
     descriptor = descriptor.map(Number);
-    
-    // Tidak kosong
     if (descriptor.length === 0) return null;
-
-    // Semua elemen harus finite numbers
-    // Gunakan isFinite() global (ES5, compatible dengan GAS Rhino engine)
-    // Number.isFinite() TIDAK didukung Rhino (ES6+)
     for (var i = 0; i < descriptor.length; i++) {
       var v = descriptor[i];
-      if (typeof v !== 'number' || !isFinite(v) || isNaN(v)) return null;
+      if (typeof v !== 'number' || isNaN(v)) return null;
     }
-
     return descriptor;
   },
 
-  /**
-   * Validasi face descriptor dengan pesan error yang jelas
-   * @param {any} descriptor
-   * @returns {{ valid: boolean, array?: number[], error?: string }}
-   */
   validateDescriptor: function (descriptor) {
     var arr = FaceService.normalizeDescriptor(descriptor);
     if (!arr) {
@@ -74,36 +52,20 @@ var FaceService = {
     return { valid: true, array: arr };
   },
 
-  /**
-   * Cosine Similarity: 0 (berbeda) - 1 (identik)
-   * Cocok untuk face descriptor yang sudah dinormalisasi.
-   * Array dengan panjang berbeda -> 0 (tidak match).
-   */
   cosineSimilarity: function (a, b) {
     if (!a || !b || a.length !== b.length || a.length === 0) return 0;
-
-    var dotProduct = 0;
-    var normA = 0;
-    var normB = 0;
-
+    var dotProduct = 0, normA = 0, normB = 0;
     for (var i = 0; i < a.length; i++) {
       dotProduct += Number(a[i]) * Number(b[i]);
       normA += Number(a[i]) * Number(a[i]);
       normB += Number(b[i]) * Number(b[i]);
     }
-
     if (normA === 0 || normB === 0) return 0;
-
     return Math.max(0, Math.min(1, dotProduct / (Math.sqrt(normA) * Math.sqrt(normB))));
   },
 
-  /**
-   * Euclidean Distance: 0 (identik) - ~2 (sangat berbeda)
-   * Sebagai alternatif matching.
-   */
   euclideanDistance: function (a, b) {
     if (!a || !b || a.length !== b.length) return Infinity;
-
     var sum = 0;
     for (var i = 0; i < a.length; i++) {
       var diff = Number(a[i]) - Number(b[i]);
@@ -113,16 +75,19 @@ var FaceService = {
   },
 
   /**
-   * Cari employee row dan dapatkan face descriptor tersimpan
-   * Menggunakan session.employeeId sebagai key pencarian.
+   * Cari employee row dengan MULTI-STRATEGY LOOKUP.
+   * 1. Coba cocokkan employeeId
+   * 2. Coba cocokkan id (internal ID)
+   * 3. Coba cocokkan email (session.email)
+   * 4. Coba cocokkan nik
    * 
-   * @param {string} employeeId - ID karyawan (EMP001, atau internal id)
-   * @returns {object} { success, descriptor, row, sheet, headers, faceDescCol, faceRegCol }
+   * @param {string} employeeId - ID karyawan dari session
+   * @param {string} optEmail - (opsional) email dari session untuk fallback lookup
+   * @returns {object} { success, descriptor, row, matchedBy, ... }
    */
-  getStoredDescriptor: function (employeeId) {
-    if (!employeeId) {
-      Logger.log('[FaceService] getStoredDescriptor: employeeId kosong');
-      return { success: false, code: 'INVALID_EMPLOYEE', message: 'ID karyawan tidak valid' };
+  findEmployeeWithFace: function (employeeId, optEmail) {
+    if (!employeeId && !optEmail) {
+      return { success: false, code: 'NO_KEY', message: 'Tidak ada identifier karyawan' };
     }
 
     var sheet = getSheet(CONFIG.SHEETS.EMPLOYEE);
@@ -131,7 +96,6 @@ var FaceService = {
     var lastRow = sheet.getLastRow();
     var lastCol = sheet.getLastColumn();
     if (lastRow < 2) {
-      Logger.log('[FaceService] getStoredDescriptor: Sheet EMPLOYEE kosong');
       return { success: false, code: 'NO_DATA', message: 'Tidak ada data karyawan' };
     }
 
@@ -140,70 +104,70 @@ var FaceService = {
 
     var idCol = headers.indexOf('id');
     var employeeIdCol = headers.indexOf('employeeId');
+    var emailCol = headers.indexOf('email');
+    var nikCol = headers.indexOf('nik');
     var faceDescCol = headers.indexOf('faceDescriptor');
     var faceRegCol = headers.indexOf('faceRegistered');
 
     if (faceDescCol < 0 || faceRegCol < 0) {
-      Logger.log('[FaceService] Kolom face tidak ditemukan. headers=' + headers.join(','));
       return { success: false, code: 'FACE_COLUMN_MISSING', message: 'Kolom face tidak ditemukan' };
     }
 
-    var searchKey = String(employeeId).trim().toLowerCase();
-    Logger.log('[FaceService] Mencari employeeId: "' + searchKey + '"');
+    var searchKeys = [];
+    if (employeeId) searchKeys.push({ key: employeeId, label: 'employeeId' });
+    if (optEmail) searchKeys.push({ key: optEmail, label: 'email' });
+
+    Logger.log('[FaceService] findEmployeeWithFace: employeeId="' + employeeId + '", email="' + optEmail + '"');
+    Logger.log('[FaceService] Searching ' + (values.length - 1) + ' employees');
 
     for (var i = 1; i < values.length; i++) {
-      var id = idCol >= 0 ? String(values[i][idCol]).trim().toLowerCase() : '';
-      var emp = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim().toLowerCase() : '';
+      var rowId = idCol >= 0 ? String(values[i][idCol]).trim().toLowerCase() : '';
+      var rowEmpId = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim().toLowerCase() : '';
+      var rowEmail = emailCol >= 0 ? String(values[i][emailCol]).trim().toLowerCase() : '';
+      var rowNik = nikCol >= 0 ? String(values[i][nikCol]).trim().toLowerCase() : '';
 
-      if (id === searchKey || emp === searchKey) {
-        Logger.log('[FaceService] Ditemukan employee di baris ' + (i + 1) + ' (id=' + id + ', employeeId=' + emp + ')');
-        
+      var matched = false;
+      var matchedBy = '';
+
+      for (var si = 0; si < searchKeys.length; si++) {
+        var sk = searchKeys[si].key.trim().toLowerCase();
+        if (rowEmpId === sk) { matched = true; matchedBy = 'employeeId'; break; }
+        if (rowId === sk) { matched = true; matchedBy = 'id'; break; }
+        if (rowEmail === sk) { matched = true; matchedBy = 'email'; break; }
+        if (rowNik === sk) { matched = true; matchedBy = 'nik'; break; }
+      }
+
+      if (matched) {
+        Logger.log('[FaceService] MATCHED via ' + matchedBy + ' at row ' + (i + 1));
+
         var rawDescriptor = values[i][faceDescCol];
         var registeredVal = String(values[i][faceRegCol]).trim().toLowerCase();
         var isRegistered = registeredVal === 'true' || registeredVal === 'yes' || registeredVal === '1';
-        
-        Logger.log('[FaceService] faceRegistered = "' + registeredVal + '" (parsed: ' + isRegistered + ')');
-        Logger.log('[FaceService] rawDescriptor type = ' + typeof rawDescriptor + ', value = "' + String(rawDescriptor).substring(0, 50) + '..."');
 
-        // Coba parsing descriptor dengan berbagai cara
         var descriptor = null;
-        
-        // Cara 1: normalizeDescriptor (handle JSON string dan array)
+
+        // Try parsing descriptor
         descriptor = FaceService.normalizeDescriptor(rawDescriptor);
-        
-        // Jika masih null, coba fallback: parse langsung
         if (!descriptor && typeof rawDescriptor === 'string') {
-          Logger.log('[FaceService] normalizeDescriptor gagal, coba fallback parsing');
           try {
             var parsed = JSON.parse(rawDescriptor);
             if (Array.isArray(parsed) && parsed.length > 0) {
               descriptor = parsed.map(Number);
-              // Validasi manual: pastikan tidak ada NaN
               var valid = true;
               for (var k = 0; k < descriptor.length; k++) {
-                if (typeof descriptor[k] !== 'number' || isNaN(descriptor[k])) {
-                  valid = false;
-                  break;
-                }
+                if (isNaN(descriptor[k])) { valid = false; break; }
               }
               if (!valid) descriptor = null;
-              else Logger.log('[FaceService] Fallback berhasil, panjang=' + descriptor.length);
             }
-          } catch (e) {
-            Logger.log('[FaceService] Fallback parsing gagal: ' + e.message);
-          }
+          } catch (e) {}
         }
 
-        // Jika deskriptor valid, auto-heal dan return success
         if (descriptor && descriptor.length > 0) {
-          Logger.log('[FaceService] Descriptor valid! Panjang=' + descriptor.length + ', isRegistered=' + isRegistered);
-          
-          // Auto-heal: jika faceRegistered=false tapi ada descriptor valid
+          // Auto-heal faceRegistered flag
           if (!isRegistered) {
-            Logger.log('[FaceService] Auto-heal: set faceRegistered=true untuk baris ' + (i + 1));
+            Logger.log('[FaceService] Auto-heal: set faceRegistered=true');
             sheet.getRange(i + 1, faceRegCol + 1).setValue('true');
             SpreadsheetApp.flush();
-            isRegistered = true;
           }
 
           return {
@@ -215,13 +179,14 @@ var FaceService = {
             faceDescCol: faceDescCol,
             faceRegCol: faceRegCol,
             employeeData: values[i],
-            descriptorLength: descriptor.length
+            descriptorLength: descriptor.length,
+            matchedBy: matchedBy,
+            employeeId: rowEmpId || rowId || ''
           };
         }
 
-        // Descriptor tidak bisa diparse
-        Logger.log('[FaceService] Descriptor tidak valid. isRegistered=' + isRegistered + ', rawDescriptor length=' + String(rawDescriptor).length);
-        
+        // Descriptor invalid
+        Logger.log('[FaceService] Descriptor INVALID at row ' + (i + 1));
         if (!isRegistered) {
           return {
             success: false,
@@ -229,7 +194,6 @@ var FaceService = {
             message: 'Wajah belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.'
           };
         }
-
         return {
           success: false,
           code: 'FACE_DATA_CORRUPT',
@@ -238,37 +202,43 @@ var FaceService = {
       }
     }
 
-    Logger.log('[FaceService] Employee TIDAK DITEMUKAN dengan ID: "' + searchKey + '" (dari ' + (values.length - 1) + ' baris)');
-    return { success: false, code: 'EMPLOYEE_NOT_FOUND', message: 'Data karyawan tidak ditemukan' };
+    Logger.log('[FaceService] NO MATCH found for employeeId="' + employeeId + '", email="' + optEmail + '"');
+    return {
+      success: false,
+      code: 'EMPLOYEE_NOT_FOUND',
+      message: 'Data karyawan tidak ditemukan. employeeId=' + employeeId + ', email=' + optEmail
+    };
   },
 
   /**
-   * Verifikasi wajah untuk absensi (check-in/check-out)
-   * Menggunakan aturan:
-   * 1. Jika faceVerified=true dari client, cukup cek wajah terdaftar
-   * 2. Jika ada faceDescriptor dari client, bandingkan dengan cosine similarity
-   * 3. Jika tidak ada keduanya, tolak
-   * 
-   * @param {object} params - { faceDescriptor, faceVerified }
-   * @param {object} session - session login (harus punya employeeId)
-   * @returns {object} { success, match, similarity, message }
+   * FIXED: Now takes session object for multi-strategy lookup.
+   * Uses employeeId first, falls back to email.
+   */
+  getStoredDescriptor: function (employeeId, optEmail) {
+    return FaceService.findEmployeeWithFace(employeeId, optEmail);
+  },
+
+  /**
+   * FIXED: verifyForAttendance now passes email for fallback lookup.
    */
   verifyForAttendance: function (params, session) {
-    if (!session || !session.employeeId) {
+    if (!session) {
       return { success: false, code: 'NO_SESSION', message: 'Sesi tidak valid' };
     }
 
-    // 1. Dapatkan face descriptor tersimpan
-    var stored = FaceService.getStoredDescriptor(session.employeeId);
-    if (!stored.success) return stored;
+    // Multi-strategy lookup: use employeeId + email
+    var stored = FaceService.getStoredDescriptor(session.employeeId, session.email);
+    if (!stored.success) {
+      // Tambah info email ke pesan error untuk debugging
+      stored.message = stored.message + ' [session: empId=' + session.employeeId + ', email=' + session.email + ']';
+      return stored;
+    }
 
-    // 2. Cek apakah client mengirim faceVerified flag
     var faceVerifiedByClient = params.faceVerified === true || params.faceVerified === 'true';
     var hasDescriptorFromClient = params.faceDescriptor &&
       Array.isArray(params.faceDescriptor) &&
       params.faceDescriptor.length > 0;
 
-    // Jika tidak ada data verifikasi dari client, tolak
     if (!faceVerifiedByClient && !hasDescriptorFromClient) {
       return {
         success: false,
@@ -277,7 +247,6 @@ var FaceService = {
       };
     }
 
-    // Jika client sudah melakukan verifikasi (faceVerified=true), lewati similarity check
     if (faceVerifiedByClient && !hasDescriptorFromClient) {
       return {
         success: true,
@@ -287,7 +256,6 @@ var FaceService = {
       };
     }
 
-    // 3. Bandingkan descriptor
     if (hasDescriptorFromClient) {
       var liveDescriptor = FaceService.normalizeDescriptor(params.faceDescriptor);
       if (!liveDescriptor) {
@@ -298,7 +266,6 @@ var FaceService = {
         };
       }
 
-      // Periksa panjang sama
       if (liveDescriptor.length !== stored.descriptor.length) {
         return {
           success: false,
@@ -330,7 +297,6 @@ var FaceService = {
       };
     }
 
-    // Fallback
     return {
       success: true,
       match: true,
@@ -340,17 +306,13 @@ var FaceService = {
   },
 
   /**
-   * Daftarkan face descriptor untuk karyawan
-   * @param {object} params - { faceDescriptor: number[] }
-   * @param {object} session - session login
-   * @returns {object} response
+   * FIXED: enroll juga menggunakan multi-strategy lookup + auto-heal employeeId
    */
   enroll: function (params, session) {
-    if (!session || !session.employeeId) {
-      return { success: false, message: 'Akun tidak terhubung ke data karyawan' };
+    if (!session) {
+      return { success: false, message: 'Sesi tidak valid' };
     }
 
-    // Validasi descriptor (tanpa paksa 128 length)
     var validation = FaceService.validateDescriptor(params && params.faceDescriptor);
     if (!validation.valid) {
       return { success: false, message: validation.error };
@@ -360,9 +322,14 @@ var FaceService = {
     var sheet = getSheet(CONFIG.SHEETS.EMPLOYEE);
     ensureFaceColumns_(sheet);
 
-    var employee = findEmployeeRow_(sheet, session.employeeId);
+    // Multi-strategy: cari employee by employeeId atau email
+    var employee = findEmployeeRowMulti_(sheet, session.employeeId, session.email);
     if (!employee) {
-      return { success: false, message: 'Karyawan tidak ditemukan dengan ID: ' + session.employeeId };
+      return {
+        success: false,
+        message: 'Karyawan tidak ditemukan. employeeId=' + session.employeeId + ', email=' + session.email +
+          '. Pastikan akun Anda terhubung dengan data karyawan.'
+      };
     }
 
     // Pastikan array tidak jagged
@@ -371,12 +338,9 @@ var FaceService = {
     if (lastRow < 2) lastRow = 2;
     var empData = sheet.getRange(1, 1, lastRow, lastCol).getValues();
 
-    // Normalize semua baris ke jumlah kolom yang sama
     var numCols = empData[0].length;
     for (var r = 0; r < empData.length; r++) {
-      while (empData[r].length < numCols) {
-        empData[r].push('');
-      }
+      while (empData[r].length < numCols) empData[r].push('');
     }
 
     var descriptorJSON = JSON.stringify(descriptor);
@@ -398,18 +362,15 @@ var FaceService = {
   },
 
   /**
-   * Cek status pendaftaran wajah
-   * @param {object} session - session login
-   * @returns {object} { success, enrolled, employeeName }
+   * FIXED: getStatus juga multi-strategy lookup
    */
   getStatus: function (session) {
-    if (!session || !session.employeeId) {
+    if (!session) {
       return { success: false, message: 'Akun tidak terhubung ke data karyawan' };
     }
 
-    var stored = FaceService.getStoredDescriptor(session.employeeId);
+    var stored = FaceService.getStoredDescriptor(session.employeeId, session.email);
 
-    // Jika wajah belum terdaftar, return enrolled=false
     if (!stored.success) {
       return {
         success: true,
@@ -429,13 +390,11 @@ var FaceService = {
 };
 
 /**
- * Pastikan kolom faceDescriptor dan faceRegistered ada di sheet EMPLOYEE
- * Dipanggil otomatis oleh getStoredDescriptor
+ * Pastikan kolom faceDescriptor dan faceRegistered ada
  */
 function ensureFaceColumns_(sheet) {
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var changed = false;
-
   if (headers.indexOf('faceDescriptor') < 0) {
     sheet.getRange(1, sheet.getLastColumn() + 1).setValue('faceDescriptor');
     changed = true;
@@ -449,10 +408,13 @@ function ensureFaceColumns_(sheet) {
 }
 
 /**
- * Cari employee row berdasarkan ID atau employeeId
- * Dipanggil oleh FaceService.enroll dan fungsi internal lainnya
+ * FIXED: Cari employee row dengan multi-strategy
+ * 1. employeeId
+ * 2. id 
+ * 3. email
+ * 4. nik
  */
-function findEmployeeRow_(sheet, employeeKey) {
+function findEmployeeRowMulti_(sheet, employeeId, optEmail) {
   ensureFaceColumns_(sheet);
 
   var lastRow = sheet.getLastRow();
@@ -464,32 +426,39 @@ function findEmployeeRow_(sheet, employeeKey) {
 
   var idCol = headers.indexOf('id');
   var employeeIdCol = headers.indexOf('employeeId');
+  var emailCol = headers.indexOf('email');
+  var nikCol = headers.indexOf('nik');
   var faceDescCol = headers.indexOf('faceDescriptor');
   var faceRegCol = headers.indexOf('faceRegistered');
 
-  employeeKey = String(employeeKey).trim();
+  var searchKeys = [];
+  if (employeeId) searchKeys.push(String(employeeId).trim().toLowerCase());
+  if (optEmail) searchKeys.push(String(optEmail).trim().toLowerCase());
 
   for (var i = 1; i < values.length; i++) {
-    var id = idCol >= 0 ? String(values[i][idCol]).trim() : '';
-    var emp = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim() : '';
+    var rowId = idCol >= 0 ? String(values[i][idCol]).trim().toLowerCase() : '';
+    var rowEmp = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim().toLowerCase() : '';
+    var rowEmail = emailCol >= 0 ? String(values[i][emailCol]).trim().toLowerCase() : '';
+    var rowNik = nikCol >= 0 ? String(values[i][nikCol]).trim().toLowerCase() : '';
 
-    if (id === employeeKey || emp === employeeKey) {
-      var descriptor = [];
-      try {
-        descriptor = FaceService.normalizeDescriptor(values[i][faceDescCol] || '[]');
-      } catch (e) {
-        descriptor = [];
+    for (var si = 0; si < searchKeys.length; si++) {
+      var sk = searchKeys[si];
+      if (rowEmp === sk || rowId === sk || rowEmail === sk || rowNik === sk) {
+        var descriptor = [];
+        try {
+          descriptor = FaceService.normalizeDescriptor(values[i][faceDescCol] || '[]');
+        } catch (e) { descriptor = []; }
+
+        return {
+          row: i,
+          values: values,
+          headers: headers,
+          faceDescCol: faceDescCol,
+          faceRegCol: faceRegCol,
+          descriptor: descriptor || [],
+          registered: String(values[i][faceRegCol]).toLowerCase() === 'true'
+        };
       }
-
-      return {
-        row: i,
-        values: values,
-        headers: headers,
-        faceDescCol: faceDescCol,
-        faceRegCol: faceRegCol,
-        descriptor: descriptor || [],
-        registered: String(values[i][faceRegCol]).toLowerCase() === 'true'
-      };
     }
   }
 

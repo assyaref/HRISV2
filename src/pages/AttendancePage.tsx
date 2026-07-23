@@ -103,7 +103,7 @@ export function AttendancePage() {
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0);
-      const photoData = canvas.toDataURL('image/jpeg', 0.7);
+      const photoData = canvas.toDataURL('image/jpeg', 0.92);
       setPhoto(photoData);
       
       // Validate face and extract descriptor

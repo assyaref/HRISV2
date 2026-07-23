@@ -13,6 +13,22 @@ function doPost(e) {
 
 function handleRequest(e, method) {
   try {
+    // ===== LOG AWAL =====
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('LOGS');
+    if (sheet) {
+      sheet.appendRow([
+        'LOG-' + new Date().getTime(),
+        '',
+        '',
+        'INFO',
+        'ROUTER',
+        'Request received: action=' + (e.parameter ? e.parameter.action : 'null') + ', method=' + method,
+        '',
+        new Date().toISOString()
+      ]);
+    }
+    // =====================
+
     // CORS headers via JSONP-style or text output
     var params = e.parameter || {};
     var body = {};
@@ -48,6 +64,17 @@ function handleRequest(e, method) {
       session = verifyToken(token);
       if (!session) {
         return jsonResponse({ success: false, message: 'Sesi tidak valid. Silakan login kembali.' });
+      }
+    }
+
+    // ========== PASTIKAN employeeId UNTUK ACTION CHECKIN/CHECKOUT ==========
+    if ((action === 'checkin' || action === 'checkout') && !session.employeeId) {
+      var empId = getEmployeeIdByEmail(session.email);
+      if (empId) {
+        session.employeeId = empId;
+        Logger.log('[FIX] employeeId assigned from email: ' + empId);
+      } else {
+        Logger.log('[ERROR] No employeeId found for email: ' + session.email);
       }
     }
 
@@ -310,4 +337,16 @@ function initAllSheets() {
   }
 
   return { success: true, message: 'Sheets initialized', data: created };
+}
+
+function getEmployeeIdByEmail(email) {
+  var sheet = getSheet('USERS');
+  if (!sheet) return null;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] === email) {
+      return data[i][4]; // kolom employeeId (indeks 4)
+    }
+  }
+  return null;
 }

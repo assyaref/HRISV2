@@ -1,6 +1,7 @@
 {
   "scriptId": "1oBIqhVK5jmCUqKs_hnieMWzTUUqHApCvrUrBMyufT7tYOaVDU6tBt7lj",
-  "rootDir": ".",
+  "rootDir": "",
+  "projectId": "clasp open",
   "scriptExtensions": [
     ".js",
     ".gs"
