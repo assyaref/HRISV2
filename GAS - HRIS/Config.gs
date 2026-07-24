@@ -13,7 +13,12 @@
 var CONFIG = {
   SPREADSHEET_ID: '13gXyJRNeSxyx6pg5fsQISZLljEg8fSJ6nPjKDR2mOYI',
   DRIVE_FOLDER_ID: '1Dk8jYqJnjfMOgxupJocVb9_7_pbdNW3u',
-  API_TOKEN: 'hris-lite-secret-token-2026',
+  get API_TOKEN() {
+    // Read from Script Properties (set via GAS editor: File > Project properties > Script properties)
+    // Fallback to default only for first-time setup; CHANGE THIS in production!
+    var stored = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+    return stored || 'hris-lite-CHANGE-ME-IN-PRODUCTION';
+  },
   SESSION_HOURS: 24,
   RATE_LIMIT_PER_MINUTE: 60,
   COMPANY_NAME: 'HRIS Lite Enterprise',
@@ -21,10 +26,13 @@ var CONFIG = {
   WORK_END: '17:00',
   LATE_TOLERANCE: 15,
   ANNUAL_LEAVE_QUOTA: 12,
-  OFFICE_LAT: -6.2088,
-  OFFICE_LNG: 106.8456,
+  OFFICE_LAT: -1.282646,
+  OFFICE_LNG: 101.181111,
   OFFICE_RADIUS: 200,
-  FACE_SIMILARITY_THRESHOLD: 0.65,
+  get FACE_SIMILARITY_THRESHOLD() {
+    var stored = PropertiesService.getScriptProperties().getProperty('FACE_SIMILARITY_THRESHOLD');
+    return stored ? Number(stored) : 0.55;
+  },
 
   SHEETS: {
     EMPLOYEE: 'EMPLOYEE',

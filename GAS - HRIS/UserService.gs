@@ -67,7 +67,7 @@ var UserService = {
           };
           
           if (params.password && params.password.length >= 4) {
-            updates.password = params.password;
+            updates.password = hashPassword(params.password);
           }
 
           for (var key in updates) {
@@ -92,7 +92,7 @@ var UserService = {
     var newUser = {
       id: id,
       email: params.email,
-      password: params.password || '123456',
+      password: hashPassword(params.password || '123456'),
       role: params.role,
       name: params.name,
       employeeId: params.employeeId || '',
@@ -154,7 +154,7 @@ var UserService = {
 
     for (var i = 1; i < data.length; i++) {
       if (data[i][idCol] === params.id) {
-        data[i][passwordCol] = params.password;
+        data[i][passwordCol] = hashPassword(params.password);
         sheet.getDataRange().setValues(data);
         addLog(session.userId, session.name, 'RESET_PASSWORD', 'User', 'Reset password for ' + data[i][headers.indexOf('email')]);
         return ok(null, 'Password berhasil direset');

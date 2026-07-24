@@ -184,6 +184,36 @@ function verifyToken(token) {
 }
 
 /**
+ * Cleanup expired sessions from SESSIONS sheet.
+ * Runs opportunistically on random requests (1-in-20 chance)
+ * to avoid running on every single request.
+ */
+function cleanupExpiredSessions() {
+  if (Math.random() > 0.05) return; // ~5% chance per request
+
+  var sheet = getSheet(CONFIG.SHEETS.SESSIONS);
+  if (!sheet || sheet.getLastRow() < 2) return;
+
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var expiresAtCol = headers.indexOf('expiresAt');
+  if (expiresAtCol < 0) return;
+
+  var now = Date.now();
+  var deleted = 0;
+  // Iterate bottom-up so row indices stay valid
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (Number(data[i][expiresAtCol]) < now) {
+      sheet.deleteRow(i + 1);
+      deleted++;
+    }
+  }
+  if (deleted > 0) {
+    Logger.log('[Session Cleanup] Removed ' + deleted + ' expired sessions');
+  }
+}
+
+/**
  * Simple rate limiting via CacheService
  */
 function checkRateLimit(clientId) {
@@ -216,4 +246,15 @@ function requireRole(session, roles) {
   if (!session) return false;
   if (session.role === 'Administrator') return true;
   return roles.indexOf(session.role) >= 0;
+}
+
+/**
+ * Hash password using SHA-256
+ * Used for secure password storage (never store plaintext)
+ */
+function hashPassword(password) {
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, password);
+  return digest.map(function(b) {
+    return ('0' + ((b & 0xFF).toString(16))).slice(-2);
+  }).join('');
 }

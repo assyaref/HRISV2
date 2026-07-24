@@ -26,9 +26,11 @@ var AttendanceService = {
   checkIn: function (params, session) {
     if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan');
 
+    var employeeId = faceResult.employeeId || session.employeeId;
+
     var today = todayStr();
     var existing = sheetToObjects(CONFIG.SHEETS.ATTENDANCE).filter(function (a) {
-      return a.employeeId === session.employeeId && a.date === today;
+      return a.employeeId === employeeId && a.date === today;
     });
     if (existing.length > 0 && existing[0].checkIn) {
       return fail('Anda sudah check-in hari ini');
@@ -62,7 +64,7 @@ var AttendanceService = {
 
     var att = {
       id: generateId('att'),
-      employeeId: session.employeeId,
+      employeeId: employeeId, // FIXED: use resolved employeeId
       date: today,
       checkIn: checkInTime,
       checkOut: '',
@@ -136,5 +138,3 @@ var AttendanceService = {
     return ok(att, 'Check-out berhasil');
   }
 };
-
-

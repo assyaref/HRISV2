@@ -34,17 +34,17 @@ var AttendanceService = (function() {
 
     if (!faceVerified) {
       // Jika tidak ada verifikasi dari frontend, lakukan pengecekan stored descriptor
-      var stored = getStoredDescriptor(employeeId);
+      var stored = getStoredDescriptor(employeeId, session.email);
       if (!stored) {
-        logError('checkIn', 'Tidak ada stored descriptor untuk ' + employeeId);
+        logError('checkIn', 'Tidak ada stored descriptor untuk ' + employeeId + ' (email=' + session.email + ')');
         return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
       }
 
       var faceDescriptor = params.faceDescriptor;
       if (faceDescriptor && Array.isArray(faceDescriptor) && faceDescriptor.length > 0) {
         var similarity = compareFaceDescriptors(faceDescriptor, stored);
-        if (similarity < 0.6) {
-          logError('checkIn', 'Similarity rendah: ' + similarity);
+        if (similarity < CONFIG.FACE_SIMILARITY_THRESHOLD) {
+          logError('checkIn', 'Similarity rendah: ' + similarity + ' (threshold: ' + CONFIG.FACE_SIMILARITY_THRESHOLD + ')');
           return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok.' };
         }
       } else {
@@ -56,7 +56,7 @@ var AttendanceService = (function() {
       logInfo('checkIn', 'faceVerified=true, skip verifikasi.');
       // Update stored descriptor jika dikirim (opsional)
       if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-        updateFaceDescriptor(employeeId, params.faceDescriptor);
+        updateFaceDescriptor(employeeId, session.email, params.faceDescriptor);
         logInfo('checkIn', 'Descriptor diperbarui untuk ' + employeeId);
       }
     }
@@ -117,16 +117,16 @@ var AttendanceService = (function() {
     logInfo('checkOut', 'faceVerified = ' + faceVerified + ', employeeId=' + employeeId);
 
     if (!faceVerified) {
-      var stored = getStoredDescriptor(employeeId);
+      var stored = getStoredDescriptor(employeeId, session.email);
       if (!stored) {
-        logError('checkOut', 'Tidak ada stored descriptor untuk ' + employeeId);
+        logError('checkOut', 'Tidak ada stored descriptor untuk ' + employeeId + ' (email=' + session.email + ')');
         return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
       }
       var faceDescriptor = params.faceDescriptor;
       if (faceDescriptor && Array.isArray(faceDescriptor) && faceDescriptor.length > 0) {
         var similarity = compareFaceDescriptors(faceDescriptor, stored);
-        if (similarity < 0.6) {
-          logError('checkOut', 'Similarity rendah: ' + similarity);
+        if (similarity < CONFIG.FACE_SIMILARITY_THRESHOLD) {
+          logError('checkOut', 'Similarity rendah: ' + similarity + ' (threshold: ' + CONFIG.FACE_SIMILARITY_THRESHOLD + ')');
           return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok.' };
         }
       } else {
@@ -135,7 +135,7 @@ var AttendanceService = (function() {
     } else {
       logInfo('checkOut', 'faceVerified=true, skip verifikasi.');
       if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-        updateFaceDescriptor(employeeId, params.faceDescriptor);
+        updateFaceDescriptor(employeeId, session.email, params.faceDescriptor);
         logInfo('checkOut', 'Descriptor diperbarui untuk ' + employeeId);
       }
     }
@@ -230,40 +230,117 @@ var AttendanceService = (function() {
     sheet.getRange(row, 15).setValue(att.notes);
   }
 
-  function getStoredDescriptor(employeeId) {
+  function getStoredDescriptor(employeeId, optEmail) {
     var sheet = getSheet('EMPLOYEE');
     if (!sheet) return null;
-    var data = sheet.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][1] === employeeId) { // kolom employeeId
-        var desc = data[i][18]; // faceDescriptor (indeks 18)
+    
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    if (lastRow < 2) return null;
+    
+    var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+    var headers = values[0];
+    
+    var idCol = headers.indexOf('id');
+    var employeeIdCol = headers.indexOf('employeeId');
+    var emailCol = headers.indexOf('email');
+    var nikCol = headers.indexOf('nik');
+    var faceDescCol = headers.indexOf('faceDescriptor');
+    var faceRegCol = headers.indexOf('faceRegistered');
+    
+    if (faceDescCol < 0) return null;
+    
+    var searchKeys = [];
+    if (employeeId) searchKeys.push(String(employeeId).trim().toLowerCase());
+    if (optEmail) searchKeys.push(String(optEmail).trim().toLowerCase());
+    
+    for (var i = 1; i < values.length; i++) {
+      var rowId = idCol >= 0 ? String(values[i][idCol]).trim().toLowerCase() : '';
+      var rowEmp = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim().toLowerCase() : '';
+      var rowEmail = emailCol >= 0 ? String(values[i][emailCol]).trim().toLowerCase() : '';
+      var rowNik = nikCol >= 0 ? String(values[i][nikCol]).trim().toLowerCase() : '';
+      
+      var matched = false;
+      for (var si = 0; si < searchKeys.length; si++) {
+        var sk = searchKeys[si];
+        if (rowEmp === sk || rowId === sk || rowEmail === sk || rowNik === sk) {
+          matched = true;
+          break;
+        }
+      }
+      
+      if (matched) {
+        var desc = values[i][faceDescCol];
         if (desc && desc.length > 2) {
           try {
-            return JSON.parse(desc);
+            var parsed = JSON.parse(desc);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              // Auto-heal faceRegistered flag
+              var regVal = String(values[i][faceRegCol]).trim().toLowerCase();
+              if (regVal !== 'true' && regVal !== '1' && regVal !== 'yes') {
+                sheet.getRange(i + 1, faceRegCol + 1).setValue('true');
+                SpreadsheetApp.flush();
+                logInfo('getStoredDescriptor', 'Auto-heal faceRegistered=true at row ' + (i + 1));
+              }
+              return parsed;
+            }
           } catch (e) {
-            logError('getStoredDescriptor', 'Gagal parse: ' + desc);
-            return null;
+            logError('getStoredDescriptor', 'Gagal parse descriptor at row ' + (i + 1));
           }
         }
+        // Jika ada descriptor tapi kosong/invalid, return null
         return null;
       }
     }
     return null;
   }
 
-  function updateFaceDescriptor(employeeId, descriptor) {
+  function updateFaceDescriptor(employeeId, optEmail, descriptor) {
     var sheet = getSheet('EMPLOYEE');
     if (!sheet) return;
-    var data = sheet.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++) {
-      if (data[i][1] === employeeId) {
+    
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    if (lastRow < 2) return;
+    
+    var values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+    var headers = values[0];
+    
+    var idCol = headers.indexOf('id');
+    var employeeIdCol = headers.indexOf('employeeId');
+    var emailCol = headers.indexOf('email');
+    var nikCol = headers.indexOf('nik');
+    var faceDescCol = headers.indexOf('faceDescriptor');
+    var faceRegCol = headers.indexOf('faceRegistered');
+    
+    var searchKeys = [];
+    if (employeeId) searchKeys.push(String(employeeId).trim().toLowerCase());
+    if (optEmail) searchKeys.push(String(optEmail).trim().toLowerCase());
+    
+    for (var i = 1; i < values.length; i++) {
+      var rowId = idCol >= 0 ? String(values[i][idCol]).trim().toLowerCase() : '';
+      var rowEmp = employeeIdCol >= 0 ? String(values[i][employeeIdCol]).trim().toLowerCase() : '';
+      var rowEmail = emailCol >= 0 ? String(values[i][emailCol]).trim().toLowerCase() : '';
+      var rowNik = nikCol >= 0 ? String(values[i][nikCol]).trim().toLowerCase() : '';
+      
+      var matched = false;
+      for (var si = 0; si < searchKeys.length; si++) {
+        var sk = searchKeys[si];
+        if (rowEmp === sk || rowId === sk || rowEmail === sk || rowNik === sk) {
+          matched = true;
+          break;
+        }
+      }
+      
+      if (matched) {
         var row = i + 1;
-        sheet.getRange(row, 19).setValue(JSON.stringify(descriptor)); // faceDescriptor
-        sheet.getRange(row, 20).setValue(true); // faceRegistered
+        sheet.getRange(row, faceDescCol + 1).setValue(JSON.stringify(descriptor));
+        sheet.getRange(row, faceRegCol + 1).setValue('true');
+        logInfo('updateFaceDescriptor', 'Updated descriptor at row ' + row + ' for employeeId=' + rowEmp + ', matchedBy multi-strategy');
         return;
       }
     }
-    logWarn('updateFaceDescriptor', 'Employee not found: ' + employeeId);
+    logWarn('updateFaceDescriptor', 'Employee not found for employeeId=' + employeeId + ', email=' + optEmail);
   }
 
   function compareFaceDescriptors(desc1, desc2) {

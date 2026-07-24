@@ -2,13 +2,26 @@
  * Geofencing Service
  * 
  * Validasi lokasi absensi berdasarkan koordinat kantor.
- * Default: Latitude -1.282646, Longitude 101.181111 (Pekanbaru)
+ * Coordinates are configurable via GEOFENCE_CONFIG.
  */
 
-// Koordinat kantor (bisa diubah via settings)
-const OFFICE_LAT = -1.282646;
-const OFFICE_LNG = 101.181111;
-const OFFICE_RADIUS_METERS = 200; // Radius 200 meter
+// Default coordinates (Pekanbaru) - override via GEOFENCE_CONFIG or settings
+const DEFAULT_OFFICE_LAT = -1.282646;
+const DEFAULT_OFFICE_LNG = 101.181111;
+const DEFAULT_OFFICE_RADIUS_METERS = 200;
+
+let _officeLat = DEFAULT_OFFICE_LAT;
+let _officeLng = DEFAULT_OFFICE_LNG;
+let _officeRadius = DEFAULT_OFFICE_RADIUS_METERS;
+
+/**
+ * Update geofence configuration from settings
+ */
+export function configureGeofence(lat: number, lng: number, radiusMeters: number): void {
+  _officeLat = lat;
+  _officeLng = lng;
+  _officeRadius = radiusMeters;
+}
 
 /**
  * Hitung jarak antara dua koordinat menggunakan Haversine formula
@@ -33,9 +46,10 @@ export interface GeofenceResult {
 /**
  * Validasi apakah lokasi user berada dalam radius kantor
  */
-export function validateGeofence(lat: number, lng: number, radiusMeters = OFFICE_RADIUS_METERS): GeofenceResult {
-  const distance = haversineDistance(lat, lng, OFFICE_LAT, OFFICE_LNG);
-  const valid = distance <= radiusMeters;
+export function validateGeofence(lat: number, lng: number, radiusMeters?: number): GeofenceResult {
+  const radius = radiusMeters ?? _officeRadius;
+  const distance = haversineDistance(lat, lng, _officeLat, _officeLng);
+  const valid = distance <= radius;
 
   if (valid) {
     return {
@@ -48,7 +62,7 @@ export function validateGeofence(lat: number, lng: number, radiusMeters = OFFICE
   return {
     valid: false,
     distance: Math.round(distance),
-    message: `📍 Anda berada ${Math.round(distance)}m dari kantor. Maksimal ${radiusMeters}m untuk absensi.`,
+    message: `📍 Anda berada ${Math.round(distance)}m dari kantor. Maksimal ${radius}m untuk absensi.`,
   };
 }
 
@@ -100,8 +114,8 @@ export async function getAddressFromCoords(lat: number, lng: number): Promise<st
 }
 
 export const GEOFENCE_CONFIG = {
-  officeLat: OFFICE_LAT,
-  officeLng: OFFICE_LNG,
-  officeRadiusMeters: OFFICE_RADIUS_METERS,
+  get officeLat() { return _officeLat; },
+  get officeLng() { return _officeLng; },
+  get officeRadiusMeters() { return _officeRadius; },
   officeAddress: 'Pekanbaru, Riau',
 };

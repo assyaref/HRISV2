@@ -56,6 +56,9 @@ function handleRequest(e, method) {
       return jsonResponse({ success: false, message: 'Rate limit exceeded. Coba lagi nanti.' });
     }
 
+    // Opportunistic cleanup of expired sessions
+    cleanupExpiredSessions();
+
     // Public actions (no auth required)
     var publicActions = ['login', 'health'];
     var session = null;
@@ -330,10 +333,10 @@ function initAllSheets() {
   // Seed default admin
   var usersSheet = getSheet('USERS');
   if (usersSheet.getLastRow() <= 1) {
-    usersSheet.appendRow(['usr-1', 'admin@hrislite.com', 'admin123', 'Administrator', '', 'System Admin', '', 'true', new Date().toISOString()]);
-    usersSheet.appendRow(['usr-2', 'hr@hrislite.com', 'hr123', 'HR', '', 'HR Manager', '', 'true', new Date().toISOString()]);
-    usersSheet.appendRow(['usr-3', 'manager@hrislite.com', 'manager123', 'Manager', '', 'Team Manager', '', 'true', new Date().toISOString()]);
-    usersSheet.appendRow(['usr-4', 'employee@hrislite.com', 'employee123', 'Employee', '', 'Staff Employee', '', 'true', new Date().toISOString()]);
+    usersSheet.appendRow(['usr-1', 'admin@hrislite.com', hashPassword('admin123'), 'Administrator', '', 'System Admin', '', 'true', new Date().toISOString()]);
+    usersSheet.appendRow(['usr-2', 'hr@hrislite.com', hashPassword('hr123'), 'HR', '', 'HR Manager', '', 'true', new Date().toISOString()]);
+    usersSheet.appendRow(['usr-3', 'manager@hrislite.com', hashPassword('manager123'), 'Manager', '', 'Team Manager', '', 'true', new Date().toISOString()]);
+    usersSheet.appendRow(['usr-4', 'employee@hrislite.com', hashPassword('employee123'), 'Employee', '', 'Staff Employee', '', 'true', new Date().toISOString()]);
   }
 
   return { success: true, message: 'Sheets initialized', data: created };

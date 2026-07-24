@@ -7,8 +7,32 @@ var AuthService = {
     if (!email || !password) return fail('Email dan password wajib diisi');
 
     var user = findByField(CONFIG.SHEETS.USERS, 'email', email);
-    if (!user || user.password !== password) {
+    if (!user) {
       return fail('Email atau password salah');
+    }
+
+    // Support both hashed and plaintext passwords (migration period)
+    var storedPassword = String(user.password);
+    var inputHash = hashPassword(password);
+    var passwordMatch = (storedPassword === inputHash) || (storedPassword === password);
+
+    if (!passwordMatch) {
+      return fail('Email atau password salah');
+    }
+
+    // Auto-upgrade: if password was stored plaintext, re-hash it
+    if (storedPassword === password && storedPassword !== inputHash) {
+      var sheet = getSheet(CONFIG.SHEETS.USERS);
+      var data = sheet.getDataRange().getValues();
+      var headers = data[0];
+      var idCol = headers.indexOf('id');
+      var pwCol = headers.indexOf('password');
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][idCol] === user.id) {
+          sheet.getRange(i + 1, pwCol + 1).setValue(inputHash);
+          break;
+        }
+      }
     }
     if (user.isActive === false || user.isActive === 'false') {
       return fail('Akun dinonaktifkan');

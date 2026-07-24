@@ -23,6 +23,7 @@ import { useToast } from '../context/ToastContext';
 import { formatDate, formatTime, todayStr, getCurrentPosition } from '../lib/utils';
 import { db } from '../lib/db';
 import { cn } from '../lib/utils';
+import { validateFace } from '../services/faceRecognition';
 
 export function EmployeeDashboard() {
   const { session, logout } = useAuth();
@@ -36,6 +37,8 @@ export function EmployeeDashboard() {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [checkType, setCheckType] = useState<'in' | 'out'>('in');
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
+  const [faceDescriptor, setFaceDescriptor] = useState<number[] | null>(null);
+  const [faceVerified, setFaceVerified] = useState(false);
 
   const today = todayStr();
   const todayAtt = stats?.recentAttendance?.find(
@@ -90,7 +93,18 @@ export function EmployeeDashboard() {
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(video, 0, 0);
-      setPhoto(canvas.toDataURL('image/jpeg', 0.6));
+      const photoData = canvas.toDataURL('image/jpeg', 0.6);
+      setPhoto(photoData);
+
+      // Validasi wajah dan ekstrak descriptor
+      const validation = validateFace(canvas);
+      if (validation.detected && validation.descriptor) {
+        setFaceDescriptor(validation.descriptor);
+        setFaceVerified(true);
+      } else {
+        setFaceDescriptor(null);
+        setFaceVerified(false);
+      }
     }
   };
 
@@ -99,6 +113,8 @@ export function EmployeeDashboard() {
     setVideoStream(null);
     setShowCamera(false);
     setPhoto(null);
+    setFaceDescriptor(null);
+    setFaceVerified(false);
   };
 
   const submitCheck = async () => {
@@ -107,6 +123,8 @@ export function EmployeeDashboard() {
       lat: location?.lat,
       lng: location?.lng,
       photo: photo || undefined,
+      faceDescriptor: faceDescriptor || undefined,
+      faceVerified: faceVerified || undefined,
     };
     const res = checkType === 'in' ? await checkIn(payload) : await checkOut(payload);
     setChecking(false);

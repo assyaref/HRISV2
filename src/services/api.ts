@@ -627,13 +627,76 @@ export async function checkIn(payload: {
   faceDescriptor?: number[];
   faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
-  return await callAPI<Attendance>('checkin', {
-    lat: payload.lat || 0,
-    lng: payload.lng || 0,
-    photo: payload.photo || '',
-    faceDescriptor: payload.faceDescriptor || [],
-    faceVerified: payload.faceVerified || false,
-  });
+  try {
+    return await callAPI<Attendance>('checkin', {
+      lat: payload.lat || 0,
+      lng: payload.lng || 0,
+      photo: payload.photo || '',
+      faceDescriptor: payload.faceDescriptor || [],
+      faceVerified: payload.faceVerified || false,
+    });
+  } catch {
+    await delay(400);
+    const session = requireAuth();
+    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
+
+    const today = todayStr();
+    const list = db.getAttendances();
+    const existing = list.find((a) => a.employeeId === session.employeeId && a.date === today);
+    if (existing?.checkIn) return fail('Anda sudah check-in hari ini') as ApiResponse<Attendance>;
+
+    // 1. CEK WAJAH TERDAFTAR
+    const employee = db.getEmployeeById(session.employeeId);
+    if (!employee?.faceRegistered || !employee?.faceDescriptor) {
+      return fail(
+        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.'
+      ) as ApiResponse<Attendance>;
+    }
+
+    // 2. VERIFIKASI WAJAH
+    if (payload.photo && !payload.faceVerified) {
+      const faceRes = await verifyAttendanceFace(payload.photo);
+      if (!faceRes.success || !faceRes.data?.match) {
+        return fail(
+          faceRes.message || 'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar.'
+        ) as ApiResponse<Attendance>;
+      }
+    }
+
+    // 3. GEOFENCING VALIDATION
+    if (payload.lat != null && payload.lng != null) {
+      const settings = db.getSettings();
+      const dist = haversineDistance(payload.lat, payload.lng, settings.officeLat, settings.officeLng);
+      if (dist > settings.officeRadiusMeters) {
+        return fail(
+          `Anda berada ${Math.round(dist)}m dari kantor. Check-in hanya dalam radius ${settings.officeRadiusMeters}m.`
+        ) as ApiResponse<Attendance>;
+      }
+    }
+
+    const now = new Date();
+    const checkInTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    const settings = db.getSettings();
+    const [startH, startM] = settings.workStartTime.split(':').map(Number);
+    const lateMinutes = Math.max(0, (now.getHours() * 60 + now.getMinutes()) - (startH * 60 + startM) - settings.lateToleranceMinutes);
+
+    const att: Attendance = {
+      id: generateId('att'),
+      employeeId: session.employeeId,
+      date: today,
+      checkIn: checkInTime,
+      checkInLat: payload.lat,
+      checkInLng: payload.lng,
+      checkInPhoto: payload.photo,
+      status: lateMinutes > 0 ? 'Late' : 'Present',
+      lateMinutes,
+      createdAt: new Date().toISOString(),
+    };
+    list.push(att);
+    db.setAttendances(list);
+    db.addLog({ userId: session.userId, userName: session.name, action: 'CHECK_IN', module: 'Attendance', details: `Check-in at ${checkInTime}` });
+    return ok(att, 'Check-in berhasil');
+  }
 }
 
 export async function checkOut(payload: {
@@ -1239,29 +1302,30 @@ export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse>
     return fail('Data wajah tidak valid. Silakan ambil foto ulang.') as ApiResponse;
   }
 
-  try {
-    // Kirim descriptor sebagai array number, bukan string
-    return await callAPI('enrollFace', { faceDescriptor });
-  } catch {
-    // Fallback ke localStorage
-    await delay();
-    const session = requireAuth();
-    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse;
-
+  // Selalu simpan ke localStorage sebagai backup (agar fallback check-in bisa akses)
+  const session = requireAuth();
+  if (session.employeeId) {
     const employees = db.getEmployees();
     const idx = employees.findIndex((e) => e.id === session.employeeId);
-    if (idx < 0) return fail('Karyawan tidak ditemukan') as ApiResponse;
+    if (idx >= 0) {
+      const descriptorJSON = JSON.stringify(faceDescriptor);
+      employees[idx].faceDescriptor = descriptorJSON;
+      employees[idx].faceRegistered = true;
+      db.setEmployees(employees);
+      db.addLog({
+        userId: session.userId, userName: session.name,
+        action: 'ENROLL_FACE', module: 'Face Recognition',
+        details: `Face enrolled locally for ${employees[idx].fullName}`
+      });
+    }
+  }
 
-    const descriptorJSON = JSON.stringify(faceDescriptor);
-    employees[idx].faceDescriptor = descriptorJSON;
-    employees[idx].faceRegistered = true;
-    db.setEmployees(employees);
-    db.addLog({ 
-      userId: session.userId, userName: session.name, 
-      action: 'ENROLL_FACE', module: 'Face Recognition', 
-      details: `Face enrolled for ${employees[idx].fullName} (descriptor: ${descriptorJSON.substring(0, 30)}...)`
-    });
-    
+  try {
+    // Kirim ke GAS juga (backup di spreadsheet)
+    return await callAPI('enrollFace', { faceDescriptor });
+  } catch {
+    // GAS tidak tersedia, data sudah tersimpan di localStorage
+    await delay();
     return ok({ descriptorLength: faceDescriptor.length }, 'Wajah berhasil didaftarkan');
   }
 }
@@ -1302,38 +1366,33 @@ export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{
 }
 
 export async function getFaceEnrollmentStatus(): Promise<ApiResponse<{ enrolled: boolean; employeeName?: string }>> {
-  try {
-    return await callAPI<{ enrolled: boolean; employeeName?: string }>('getFaceEnrollmentStatus');
-  } catch {
-    // Fallback ke localStorage
-    await delay();
-    const session = requireAuth();
-    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
+  // Selalu cek localStorage dulu (karena enrollFace selalu simpan ke localStorage)
+  await delay(100);
+  const session = requireAuth();
+  if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
 
-    const employee = db.getEmployeeById(session.employeeId);
-    if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
+  const employee = db.getEmployeeById(session.employeeId);
+  if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
 
-    // KRITIS: validasi descriptor, bukan cuma faceRegistered flag
-    // Konsisten dengan GAS UserService.gs getFaceStatus()
-    const enrolled = isFaceEnrolled(employee);
+  // Validasi descriptor - konsisten dengan GAS UserService.gs
+  const enrolled = isFaceEnrolled(employee);
 
-    // Auto-healing: jika faceRegistered=true tapi descriptor kosong, reset flag
-    if (!enrolled && employee.faceRegistered) {
-      console.warn(`Auto-healing: ${employee.fullName} had faceRegistered=true but empty descriptor - resetting`);
-      const employees = db.getEmployees();
-      const idx = employees.findIndex((e) => e.id === employee.id);
-      if (idx >= 0) {
-        employees[idx].faceRegistered = false;
-        employees[idx].faceDescriptor = '';
-        db.setEmployees(employees);
-      }
+  // Auto-healing: jika faceRegistered=true tapi descriptor kosong, reset flag
+  if (!enrolled && employee.faceRegistered) {
+    console.warn(`Auto-healing: ${employee.fullName} had faceRegistered=true but empty descriptor - resetting`);
+    const employees = db.getEmployees();
+    const idx = employees.findIndex((e) => e.id === employee.id);
+    if (idx >= 0) {
+      employees[idx].faceRegistered = false;
+      employees[idx].faceDescriptor = '';
+      db.setEmployees(employees);
     }
-
-    return ok({
-      enrolled,
-      employeeName: employee.fullName,
-    });
   }
+
+  return ok({
+    enrolled,
+    employeeName: employee.fullName,
+  });
 }
 
 // ========== UPLOAD ==========

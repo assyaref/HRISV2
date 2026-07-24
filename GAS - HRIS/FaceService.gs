@@ -252,7 +252,9 @@ var FaceService = {
         success: true,
         match: true,
         similarity: 100,
-        message: 'Wajah terverifikasi oleh client'
+        message: 'Wajah terverifikasi oleh client',
+        employeeId: stored.employeeId,
+        employeeData: stored.employeeData
       };
     }
 
@@ -293,7 +295,9 @@ var FaceService = {
         success: true,
         match: true,
         similarity: Math.round(similarity * 100),
-        message: 'Wajah cocok'
+        message: 'Wajah cocok',
+        employeeId: stored.employeeId,
+        employeeData: stored.employeeData
       };
     }
 
@@ -301,7 +305,9 @@ var FaceService = {
       success: true,
       match: true,
       similarity: 100,
-      message: 'Wajah terverifikasi'
+      message: 'Wajah terverifikasi',
+      employeeId: stored.employeeId,
+      employeeData: stored.employeeData
     };
   },
 
