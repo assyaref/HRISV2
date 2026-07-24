@@ -120,6 +120,25 @@ function delay(ms = API_DELAY) {
 }
 
 /**
+ * Multi-strategy employee lookup - mirrors FaceService.gs findEmployeeWithFace
+ * 1. By id (session.employeeId → Employee.id)
+ * 2. By employeeId field (session.employeeId → Employee.employeeId)
+ * 3. By email (session.email → Employee.email)
+ */
+function findEmployeeForSession(session: Session): Employee | undefined {
+  if (session.employeeId) {
+    const byId = db.getEmployeeById(session.employeeId);
+    if (byId) return byId;
+    const byEmpId = db.getEmployeeByEmployeeId(session.employeeId);
+    if (byEmpId) return byEmpId;
+  }
+  if (session.email) {
+    return db.getEmployeeByEmail(session.email);
+  }
+  return undefined;
+}
+
+/**
  * Universal API caller - mencoba GAS dulu, fallback ke local jika gagal
  */
 async function callAPI<T>(action: string, payload: Record<string, unknown> = {}): Promise<ApiResponse<T>> {
@@ -638,16 +657,22 @@ export async function checkIn(payload: {
   } catch {
     await delay(400);
     const session = requireAuth();
-    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
 
     const today = todayStr();
     const list = db.getAttendances();
-    const existing = list.find((a) => a.employeeId === session.employeeId && a.date === today);
+    const existing = list.find((a) => a.employeeId === (session.employeeId || '') && a.date === today);
     if (existing?.checkIn) return fail('Anda sudah check-in hari ini') as ApiResponse<Attendance>;
 
+    // Multi-strategy employee lookup
+    const employee = findEmployeeForSession(session);
+    const employeeIdForAtt = employee?.id || session.employeeId || '';
+
+    if (!employeeIdForAtt) {
+      return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
+    }
+
     // 1. CEK WAJAH TERDAFTAR
-    const employee = db.getEmployeeById(session.employeeId);
-    if (!employee?.faceRegistered || !employee?.faceDescriptor) {
+    if (!isFaceEnrolled(employee)) {
       return fail(
         'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.'
       ) as ApiResponse<Attendance>;
@@ -682,7 +707,7 @@ export async function checkIn(payload: {
 
     const att: Attendance = {
       id: generateId('att'),
-      employeeId: session.employeeId,
+      employeeId: employeeIdForAtt,
       date: today,
       checkIn: checkInTime,
       checkInLat: payload.lat,
@@ -717,17 +742,24 @@ export async function checkOut(payload: {
   } catch {
     await delay(400);
     const session = requireAuth();
-    if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
 
     const today = todayStr();
     const list = db.getAttendances();
-    const idx = list.findIndex((a) => a.employeeId === session.employeeId && a.date === today);
+
+    // Multi-strategy employee lookup
+    const employee = findEmployeeForSession(session);
+    const employeeIdForAtt = employee?.id || session.employeeId || '';
+
+    if (!employeeIdForAtt) {
+      return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
+    }
+
+    const idx = list.findIndex((a) => a.employeeId === employeeIdForAtt && a.date === today);
     if (idx < 0 || !list[idx].checkIn) return fail('Anda belum check-in hari ini') as ApiResponse<Attendance>;
     if (list[idx].checkOut) return fail('Anda sudah check-out hari ini') as ApiResponse<Attendance>;
 
     // 1. CEK APAKAH WAJAH SUDAH TERDAFTAR
-    const employee = db.getEmployeeById(session.employeeId);
-    if (!employee?.faceRegistered || !employee?.faceDescriptor) {
+    if (!isFaceEnrolled(employee)) {
       return fail(
         'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.'
       ) as ApiResponse<Attendance>;
@@ -1302,11 +1334,13 @@ export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse>
     return fail('Data wajah tidak valid. Silakan ambil foto ulang.') as ApiResponse;
   }
 
-  // Selalu simpan ke localStorage sebagai backup (agar fallback check-in bisa akses)
   const session = requireAuth();
-  if (session.employeeId) {
+
+  // Multi-strategy employee lookup (mirrors FaceService.gs)
+  const employee = findEmployeeForSession(session);
+  if (employee) {
     const employees = db.getEmployees();
-    const idx = employees.findIndex((e) => e.id === session.employeeId);
+    const idx = employees.findIndex((e) => e.id === employee.id);
     if (idx >= 0) {
       const descriptorJSON = JSON.stringify(faceDescriptor);
       employees[idx].faceDescriptor = descriptorJSON;
@@ -1318,13 +1352,17 @@ export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse>
         details: `Face enrolled locally for ${employees[idx].fullName}`
       });
     }
+
+    // Auto-heal session.employeeId for future lookups
+    if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
+      session.employeeId = employee.id;
+      saveSession(session);
+    }
   }
 
   try {
-    // Kirim ke GAS juga (backup di spreadsheet)
     return await callAPI('enrollFace', { faceDescriptor });
   } catch {
-    // GAS tidak tersedia, data sudah tersimpan di localStorage
     await delay();
     return ok({ descriptorLength: faceDescriptor.length }, 'Wajah berhasil didaftarkan');
   }
@@ -1333,9 +1371,11 @@ export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse>
 export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{ match: boolean; similarity: number }>> {
   await delay();
   const session = requireAuth();
-  if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as unknown as ApiResponse<{ match: boolean; similarity: number }>;
 
-  const employee = db.getEmployeeById(session.employeeId);
+  const employee = findEmployeeForSession(session);
+  if (!employee) {
+    return fail('Akun tidak terhubung ke data karyawan') as unknown as ApiResponse<{ match: boolean; similarity: number }>;
+  }
   
   // Validasi descriptor - konsisten dengan GAS UserService.gs
   if (!isFaceEnrolled(employee)) {
@@ -1366,13 +1406,18 @@ export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{
 }
 
 export async function getFaceEnrollmentStatus(): Promise<ApiResponse<{ enrolled: boolean; employeeName?: string }>> {
-  // Selalu cek localStorage dulu (karena enrollFace selalu simpan ke localStorage)
+  // Multi-strategy employee lookup (mirrors FaceService.gs)
   await delay(100);
   const session = requireAuth();
-  if (!session.employeeId) return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
 
-  const employee = db.getEmployeeById(session.employeeId);
+  const employee = findEmployeeForSession(session);
   if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
+
+  // Auto-heal session.employeeId for future lookups
+  if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
+    session.employeeId = employee.id;
+    saveSession(session);
+  }
 
   // Validasi descriptor - konsisten dengan GAS UserService.gs
   const enrolled = isFaceEnrolled(employee);

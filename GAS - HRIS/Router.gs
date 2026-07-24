@@ -70,8 +70,8 @@ function handleRequest(e, method) {
       }
     }
 
-    // ========== PASTIKAN employeeId UNTUK ACTION CHECKIN/CHECKOUT ==========
-    if ((action === 'checkin' || action === 'checkout') && !session.employeeId) {
+    // ========== PASTIKAN employeeId UNTUK ACTION YANG MEMBUTUHKAN ==========
+    if ((action === 'checkin' || action === 'checkout' || action === 'enrollFace' || action === 'getFaceEnrollmentStatus' || action === 'verifyAttendanceFace') && !session.employeeId) {
       var empId = getEmployeeIdByEmail(session.email);
       if (empId) {
         session.employeeId = empId;

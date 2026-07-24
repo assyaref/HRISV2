@@ -28,7 +28,8 @@ export function FaceEnrollmentPage() {
   const [updating, setUpdating] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
 
-  const employee = session?.employeeId ? db.getEmployeeById(session.employeeId) : null;
+  const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null)
+    || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null);
 
   // Properly release camera resources
   const releaseCamera = useCallback(() => {
@@ -211,9 +212,9 @@ export function FaceEnrollmentPage() {
     if (!result.isConfirmed) return;
 
     // Reset face enrollment
-    if (session?.employeeId && employee) {
+    if (employee) {
       const employees = db.getEmployees();
-      const idx = employees.findIndex((e) => e.id === session.employeeId);
+      const idx = employees.findIndex((e) => e.id === employee.id);
       if (idx >= 0) {
         employees[idx].faceDescriptor = undefined;
         employees[idx].faceRegistered = false;

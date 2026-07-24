@@ -23,7 +23,8 @@ export function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [changingPass, setChangingPass] = useState(false);
 
-  const employee = session?.employeeId ? db.getEmployeeById(session.employeeId) : null;
+  const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null)
+    || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null);
 
   const handlePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

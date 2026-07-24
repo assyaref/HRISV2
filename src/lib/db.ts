@@ -75,6 +75,9 @@ export function getEmployeeById(id: string): Employee | undefined {
 export function getEmployeeByEmployeeId(employeeId: string): Employee | undefined {
   return getEmployees().find((e) => e.employeeId === employeeId);
 }
+export function getEmployeeByEmail(email: string): Employee | undefined {
+  return getEmployees().find((e) => e.email.toLowerCase() === email.toLowerCase());
+}
 
 export function getDepartments(): Department[] {
   return getItem(KEYS.departments, mock.departments);
@@ -211,6 +214,7 @@ export const db = {
   setEmployees,
   getEmployeeById,
   getEmployeeByEmployeeId,
+  getEmployeeByEmail,
   getDepartments,
   setDepartments,
   getDepartmentById,
