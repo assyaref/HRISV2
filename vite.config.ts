@@ -13,7 +13,7 @@ export default defineConfig({
   // Relative assets keep the build portable for both project Pages and
   // user/organisation Pages URLs.
   base: './',
-  plugins: [react(), tailwindcss(), viteSingleFile()],
+  plugins: [react(), tailwindcss()/*, viteSingleFile()*/],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

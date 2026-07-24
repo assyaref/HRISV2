@@ -9,6 +9,7 @@
 import { gasRequest, GAS_API_URL } from './gasClient';
 import { getItem, setItem, removeItem } from '../lib/storage';
 import { db } from '../lib/db';
+import { verifyFaceFromBase64 } from './faceRecognition';
 import {
   generateId,
   generateToken,
@@ -1398,7 +1399,6 @@ export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{
   }
   
   // Verify face from photo
-  const { verifyFaceFromBase64 } = await import('./faceRecognition');
   const result = await verifyFaceFromBase64(photo, enrolledDescriptor);
   
   const faceResult: { match: boolean; similarity: number } = {
