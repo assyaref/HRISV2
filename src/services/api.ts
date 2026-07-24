@@ -139,6 +139,15 @@ function findEmployeeForSession(session: Session): Employee | undefined {
 }
 
 /**
+ * Validasi apakah faceDescriptor benar-benar valid
+ */
+function isFaceEnrolled(employee: { faceDescriptor?: string; faceRegistered?: boolean } | null | undefined): boolean {
+  if (!employee) return false;
+  const desc = String(employee.faceDescriptor || '').trim();
+  return desc.length > 2 && desc !== '[]';
+}
+
+/**
  * Universal API caller - mencoba GAS dulu, fallback ke local jika gagal
  */
 async function callAPI<T>(action: string, payload: Record<string, unknown> = {}): Promise<ApiResponse<T>> {
@@ -1323,12 +1332,6 @@ export async function checkGASHealth(): Promise<ApiResponse> {
  * Helper: Validasi apakah faceDescriptor benar-benar valid (bukan cuma faceRegistered=true)
  * Mencegah inconsistent state: faceRegistered=true tapi descriptor kosong/rusak
  */
-function isFaceEnrolled(employee: { faceDescriptor?: string; faceRegistered?: boolean } | null | undefined): boolean {
-  if (!employee) return false;
-  const desc = String(employee.faceDescriptor || '').trim();
-  return desc.length > 2 && desc !== '[]';
-}
-
 export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse> {
   if (!faceDescriptor || faceDescriptor.length === 0) {
     return fail('Data wajah tidak valid. Silakan ambil foto ulang.') as ApiResponse;
