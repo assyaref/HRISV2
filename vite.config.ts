@@ -14,6 +14,9 @@ export default defineConfig({
   // user/organisation Pages URLs.
   base: './',
   plugins: [react(), tailwindcss()/*, viteSingleFile()*/],
+  build: {
+    minify: false,
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

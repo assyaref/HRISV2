@@ -41,6 +41,8 @@ export function EmployeeDashboard() {
   const [faceVerified, setFaceVerified] = useState(false);
 
   const today = todayStr();
+  const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null)
+    || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null);
   const empIdForLookup = employee?.id || session?.employeeId;
   const todayAtt = stats?.recentAttendance?.find(
     (a) => (a.employeeId === empIdForLookup || a.employeeId === session?.employeeId) && a.date === today
@@ -149,9 +151,6 @@ export function EmployeeDashboard() {
     hour: '2-digit',
     minute: '2-digit',
   });
-
-  const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null)
-    || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary to-primary/90 text-white">

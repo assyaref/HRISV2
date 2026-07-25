@@ -10,19 +10,7 @@ import {
   Megaphone,
   RefreshCw,
 } from 'lucide-react';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  ArcElement,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler,
-} from 'chart.js';
+import "chart.js/auto";
 import { Bar, Doughnut } from 'react-chartjs-2';
 import { getDashboard } from '../services/api';
 import type { DashboardStats } from '../types';
@@ -36,7 +24,7 @@ import { formatDate, formatTime } from '../lib/utils';
 import { db } from '../lib/db';
 import { useTheme } from '../context/ThemeContext';
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, PointElement, LineElement, Title, Tooltip, Legend, Filler);
+
 
 export function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);

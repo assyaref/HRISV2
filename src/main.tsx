@@ -10,9 +10,25 @@ createRoot(document.getElementById("root")!).render(
 );
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch((error) => {
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('./service-worker.js');
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (newWorker) {
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              (newWorker as ServiceWorker).postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        }
+      });
+    } catch (error) {
       console.error('Pendaftaran service worker gagal:', error);
-    });
+    }
   });
 }
+
+navigator.serviceWorker?.addEventListener('controllerchange', () => {
+  window.location.reload();
+});
