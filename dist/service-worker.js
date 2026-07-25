@@ -1,4 +1,4 @@
-const CACHE_NAME = 'hris-lite-v1';
+const CACHE_NAME = 'hris-lite-v2';
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (event) => {
