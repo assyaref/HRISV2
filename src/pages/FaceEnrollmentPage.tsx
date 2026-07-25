@@ -1,6 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Camera, CheckCircle2, XCircle, User, Shield, Upload, RefreshCw } from 'lucide-react';
+import { Camera, CheckCircle2, XCircle, User, Shield, RefreshCw } from 'lucide-react';
 import Swal from 'sweetalert2';
 import * as api from '../services/api';
 import { validateFace } from '../services/faceRecognition';
@@ -15,9 +14,7 @@ import { cn } from '../lib/utils';
 export function FaceEnrollmentPage() {
   const toast = useToast();
   const { session } = useAuth();
-  const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const [cameraActive, setCameraActive] = useState(false);
@@ -29,7 +26,7 @@ export function FaceEnrollmentPage() {
   const [cameraStarting, setCameraStarting] = useState(false);
 
   const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null)
-    || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null);
+    || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null); 
 
   // Properly release camera resources
   const releaseCamera = useCallback(() => {

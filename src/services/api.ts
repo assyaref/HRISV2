@@ -9,8 +9,7 @@
 import { gasRequest, GAS_API_URL } from './gasClient';
 import { getItem, setItem, removeItem } from '../lib/storage';
 import { db } from '../lib/db';
-// Dynamic import to avoid circular dependency with faceRecognition
-// (pages that import api.ts may also import faceRecognition.ts directly)
+import { verifyFaceFromBase64 } from './faceRecognition';
 import {
   generateId,
   generateToken,
@@ -1399,8 +1398,7 @@ export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{
     return fail('Data wajah tidak valid. Silakan daftarkan ulang.') as ApiResponse<{ match: boolean; similarity: number }>;
   }
   
-  // Verify face from photo (dynamic import to avoid circular dependency)
-  const { verifyFaceFromBase64 } = await import('./faceRecognition');
+  // Verify face from photo
   const result = await verifyFaceFromBase64(photo, enrolledDescriptor);
   
   const faceResult: { match: boolean; similarity: number } = {
