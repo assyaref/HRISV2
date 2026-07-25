@@ -428,13 +428,7 @@ var AttendanceService = (function() {
     ]);
   }
 
-  function getSheet(name) {
-    try {
-      return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
-    } catch (e) {
-      return null;
-    }
-  }
+  // Uses global getSheet() from Config.gs which correctly uses SpreadsheetApp.openById()
 
   /**
    * List attendance records (for admin/history views)

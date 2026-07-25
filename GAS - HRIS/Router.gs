@@ -14,7 +14,7 @@ function doPost(e) {
 function handleRequest(e, method) {
   try {
     // ===== LOG AWAL =====
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('LOGS');
+    var sheet = getSheet('LOGS');
     if (sheet) {
       sheet.appendRow([
         'LOG-' + new Date().getTime(),
