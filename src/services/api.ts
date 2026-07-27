@@ -192,30 +192,22 @@ export async function login(email: string, password: string, remember = false): 
 
   if (useGas) {
     try {
-      const result = await gasRequest<ApiResponse<Session>>('login', { 
-        email, 
-        password, 
-        remember 
+      const result = await gasRequest<ApiResponse<Session>>('login', {
+        email,
+        password,
+        remember,
       });
-      
+
       if (result.success && result.data) {
-        // Auto-heal session.employeeId for GAS backend
         const healedSession = autoHealSessionEmployeeId(result.data);
+        if (result.token) healedSession.token = result.token;
         saveSession(healedSession);
-        if (result.token) {
-          healedSession.token = result.token;
-          saveSession(healedSession);
-        }
         return { ...result, data: healedSession };
       }
-      if (result.success && result.token && result.data) {
-        // Pastikan token juga ada di data session
-        result.data.token = result.token;
-        saveSession(result.data);
-      }
+      // GAS returned a proper fail response (wrong password, etc) — return as-is
       return result;
     } catch (error) {
-      console.warn('GAS login failed, trying local fallback:', error);
+      console.warn('GAS login network error, trying local fallback:', error);
     }
   }
 

@@ -21328,20 +21328,13 @@ async function login(email, password, remember = false) {
       });
       if (result.success && result.data) {
         const healedSession = autoHealSessionEmployeeId(result.data);
+        if (result.token) healedSession.token = result.token;
         saveSession(healedSession);
-        if (result.token) {
-          healedSession.token = result.token;
-          saveSession(healedSession);
-        }
         return { ...result, data: healedSession };
-      }
-      if (result.success && result.token && result.data) {
-        result.data.token = result.token;
-        saveSession(result.data);
       }
       return result;
     } catch (error2) {
-      console.warn("GAS login failed, trying local fallback:", error2);
+      console.warn("GAS login network error, trying local fallback:", error2);
     }
   }
   await delay();
@@ -54232,7 +54225,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-DfIYSxeN.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-Du97Ljq8.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
