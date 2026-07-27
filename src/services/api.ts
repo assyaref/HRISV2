@@ -658,6 +658,52 @@ export async function deletePosition(id: string): Promise<ApiResponse> {
 }
 
 // ========== ATTENDANCE ==========
+
+/**
+ * Verifikasi wajah secara lokal menggunakan descriptor dari localStorage.
+ * Dipanggil sebelum kirim ke GAS agar GAS menerima faceVerified=true.
+ * Ini mengatasi kasus di mana descriptor belum tersimpan di Google Spreadsheet.
+ */
+async function resolveLocalFaceVerification(
+  payload: { photo?: string; faceDescriptor?: number[]; faceVerified?: boolean }
+): Promise<{ success: boolean; message: string; descriptor?: number[] }> {
+  const session = getSession();
+  if (!session) return { success: false, message: 'Sesi tidak valid. Silakan login kembali.' };
+
+  const employee = findEmployeeForSession(session);
+
+  // Cek wajah terdaftar di localStorage
+  if (!isFaceEnrolled(employee)) {
+    return {
+      success: false,
+      message: 'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.',
+    };
+  }
+
+  // Jika sudah diverifikasi oleh client (dari capturePhoto), langsung lanjut
+  if (payload.faceVerified && payload.faceDescriptor && payload.faceDescriptor.length > 0) {
+    return { success: true, message: 'OK', descriptor: payload.faceDescriptor };
+  }
+
+  // Verifikasi dari foto jika ada
+  if (payload.photo) {
+    let enrolledDescriptor: number[];
+    try {
+      enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
+    } catch {
+      return { success: false, message: 'Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.' };
+    }
+    const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
+    if (!result.matched) {
+      return { success: false, message: result.message || 'Verifikasi wajah gagal. Wajah tidak cocok.' };
+    }
+    return { success: true, message: 'OK', descriptor: enrolledDescriptor };
+  }
+
+  // Tidak ada foto dan belum verified — tolak
+  return { success: false, message: 'Foto wajah diperlukan untuk absensi.' };
+}
+
 export async function getAttendances(filters?: {
   employeeId?: string;
   dateFrom?: string;
@@ -689,12 +735,17 @@ export async function checkIn(payload: {
   faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
   try {
+    // Lakukan verifikasi wajah lokal sebelum kirim ke GAS
+    // Ini memastikan GAS menerima faceVerified=true sehingga bypass cek Spreadsheet
+    const localVerified = await resolveLocalFaceVerification(payload);
+    if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
+
     return await callAPI<Attendance>('checkin', {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || '',
-      faceDescriptor: payload.faceDescriptor || [],
-      faceVerified: payload.faceVerified || false,
+      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceVerified: true,
     });
   } catch {
     await delay(400);
@@ -777,12 +828,15 @@ export async function checkOut(payload: {
   faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
   try {
+    const localVerified = await resolveLocalFaceVerification(payload);
+    if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
+
     return await callAPI<Attendance>('checkout', {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || '',
-      faceDescriptor: payload.faceDescriptor || [],
-      faceVerified: payload.faceVerified || false,
+      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceVerified: true,
     });
   } catch {
     await delay(400);

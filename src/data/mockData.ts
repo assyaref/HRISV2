@@ -328,8 +328,8 @@ export const activityLogs: ActivityLog[] = [
 ];
 
 export const DEMO_ACCOUNTS = [
-  { email: 'admin@hrislite.com', password: 'admin123', role: 'Administrator' },
-  { email: 'hr@hrislite.com', password: 'hr123', role: 'HR' },
-  { email: 'manager@hrislite.com', password: 'manager123', role: 'Manager' },
-  { email: 'employee@hrislite.com', password: 'employee123', role: 'Employee' },
+  { email: 'admin@hrislite.com', password: '<admin_password>', role: 'Administrator' },
+  { email: 'hr@hrislite.com', password: '<hr_password>', role: 'HR' },
+  { email: 'manager@hrislite.com', password: '<manager_password>', role: 'Manager' },
+  { email: 'employee@hrislite.com', password: '<employee_password>', role: 'Employee' },
 ];

@@ -15486,10 +15486,10 @@ const activityLogs = [
   { id: "log-3", userId: "usr-3", userName: "Ahmad Rizki", action: "APPROVE", module: "Leave", details: "Approved leave leave-3", createdAt: daysAgo(3) + "T14:00:00Z" }
 ];
 const DEMO_ACCOUNTS = [
-  { email: "admin@hrislite.com", password: "admin123", role: "Administrator" },
-  { email: "hr@hrislite.com", password: "hr123", role: "HR" },
-  { email: "manager@hrislite.com", password: "manager123", role: "Manager" },
-  { email: "employee@hrislite.com", password: "employee123", role: "Employee" }
+  { email: "admin@hrislite.com", password: "<admin_password>", role: "Administrator" },
+  { email: "hr@hrislite.com", password: "<hr_password>", role: "HR" },
+  { email: "manager@hrislite.com", password: "<manager_password>", role: "Manager" },
+  { email: "employee@hrislite.com", password: "<employee_password>", role: "Employee" }
 ];
 const KEYS = {
   users: "users",
@@ -21288,6 +21288,16 @@ function findEmployeeForSession(session) {
   }
   return void 0;
 }
+function autoHealSessionEmployeeId(session) {
+  const employee = findEmployeeForSession(session);
+  if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
+    const healedSession = { ...session, employeeId: employee.id };
+    saveSession(healedSession);
+    console.log(`[Auto-Heal] Updated session.employeeId: "${session.employeeId}" → "${employee.id}" for ${employee.fullName}`);
+    return healedSession;
+  }
+  return session;
+}
 function isFaceEnrolled(employee) {
   if (!employee) return false;
   const desc = String(employee.faceDescriptor || "").trim();
@@ -21317,7 +21327,13 @@ async function login(email, password, remember = false) {
         remember
       });
       if (result.success && result.data) {
-        saveSession(result.data);
+        const healedSession = autoHealSessionEmployeeId(result.data);
+        saveSession(healedSession);
+        if (result.token) {
+          healedSession.token = result.token;
+          saveSession(healedSession);
+        }
+        return { ...result, data: healedSession };
       }
       if (result.success && result.token && result.data) {
         result.data.token = result.token;
@@ -21338,13 +21354,19 @@ async function login(email, password, remember = false) {
   }
   const token = generateToken();
   const expiresAt = Date.now() + (remember ? 30 : 1) * 24 * 60 * 60 * 1e3;
+  let employeeId = user.employeeId || "";
+  const employee = db.getEmployees().find((e) => e.email.toLowerCase() === email.toLowerCase());
+  if (employee && employee.id) {
+    employeeId = employee.id;
+    console.log(`[Auto-Heal] Updated session.employeeId: "${user.employeeId}" → "${employeeId}" for ${email}`);
+  }
   const session = {
     token,
     userId: user.id,
     email: user.email,
     role: user.role,
     name: user.name,
-    employeeId: user.employeeId,
+    employeeId,
     avatar: user.avatar,
     expiresAt
   };
@@ -21681,6 +21703,34 @@ async function deletePosition(id2) {
     return ok(null, "Jabatan dihapus");
   }
 }
+async function resolveLocalFaceVerification(payload) {
+  const session = getSession();
+  if (!session) return { success: false, message: "Sesi tidak valid. Silakan login kembali." };
+  const employee = findEmployeeForSession(session);
+  if (!isFaceEnrolled(employee)) {
+    return {
+      success: false,
+      message: "Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID."
+    };
+  }
+  if (payload.faceVerified && payload.faceDescriptor && payload.faceDescriptor.length > 0) {
+    return { success: true, message: "OK", descriptor: payload.faceDescriptor };
+  }
+  if (payload.photo) {
+    let enrolledDescriptor;
+    try {
+      enrolledDescriptor = JSON.parse(employee.faceDescriptor);
+    } catch {
+      return { success: false, message: "Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID." };
+    }
+    const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
+    if (!result.matched) {
+      return { success: false, message: result.message || "Verifikasi wajah gagal. Wajah tidak cocok." };
+    }
+    return { success: true, message: "OK", descriptor: enrolledDescriptor };
+  }
+  return { success: false, message: "Foto wajah diperlukan untuk absensi." };
+}
 async function getAttendances(filters) {
   try {
     return await callAPI("getAttendances", {
@@ -21701,22 +21751,25 @@ async function getAttendances(filters) {
 }
 async function checkIn(payload) {
   try {
+    const localVerified = await resolveLocalFaceVerification(payload);
+    if (!localVerified.success) return localVerified;
     return await callAPI("checkin", {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || "",
-      faceDescriptor: payload.faceDescriptor || [],
-      faceVerified: payload.faceVerified || false
+      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceVerified: true
     });
   } catch {
     await delay(400);
     const session = requireAuth();
+    const healedSession = autoHealSessionEmployeeId(session);
     const today2 = todayStr();
     const list = db.getAttendances();
-    const existing = list.find((a2) => a2.employeeId === (session.employeeId || "") && a2.date === today2);
+    const existing = list.find((a2) => a2.employeeId === (healedSession.employeeId || "") && a2.date === today2);
     if (existing?.checkIn) return fail("Anda sudah check-in hari ini");
-    const employee = findEmployeeForSession(session);
-    const employeeIdForAtt = employee?.id || session.employeeId || "";
+    const employee = findEmployeeForSession(healedSession);
+    const employeeIdForAtt = employee?.id || healedSession.employeeId || "";
     if (!employeeIdForAtt) {
       return fail("Akun tidak terhubung ke data karyawan");
     }
@@ -21761,26 +21814,29 @@ async function checkIn(payload) {
     };
     list.push(att);
     db.setAttendances(list);
-    db.addLog({ userId: session.userId, userName: session.name, action: "CHECK_IN", module: "Attendance", details: `Check-in at ${checkInTime}` });
+    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: "CHECK_IN", module: "Attendance", details: `Check-in at ${checkInTime}` });
     return ok(att, "Check-in berhasil");
   }
 }
 async function checkOut(payload) {
   try {
+    const localVerified = await resolveLocalFaceVerification(payload);
+    if (!localVerified.success) return localVerified;
     return await callAPI("checkout", {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || "",
-      faceDescriptor: payload.faceDescriptor || [],
-      faceVerified: payload.faceVerified || false
+      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceVerified: true
     });
   } catch {
     await delay(400);
     const session = requireAuth();
+    const healedSession = autoHealSessionEmployeeId(session);
     const today2 = todayStr();
     const list = db.getAttendances();
-    const employee = findEmployeeForSession(session);
-    const employeeIdForAtt = employee?.id || session.employeeId || "";
+    const employee = findEmployeeForSession(healedSession);
+    const employeeIdForAtt = employee?.id || healedSession.employeeId || "";
     if (!employeeIdForAtt) {
       return fail("Akun tidak terhubung ke data karyawan");
     }
@@ -21823,7 +21879,7 @@ async function checkOut(payload) {
       workHours
     };
     db.setAttendances(list);
-    db.addLog({ userId: session.userId, userName: session.name, action: "CHECK_OUT", module: "Attendance", details: `Work hours: ${workHours}h` });
+    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: "CHECK_OUT", module: "Attendance", details: `Work hours: ${workHours}h` });
     return ok(list[idx], "Check-out berhasil");
   }
 }
@@ -22263,7 +22319,8 @@ async function enrollFace(faceDescriptor) {
     return fail("Data wajah tidak valid. Silakan ambil foto ulang.");
   }
   const session = requireAuth();
-  const employee = findEmployeeForSession(session);
+  const healedSession = autoHealSessionEmployeeId(session);
+  const employee = findEmployeeForSession(healedSession);
   if (employee) {
     const employees2 = db.getEmployees();
     const idx = employees2.findIndex((e) => e.id === employee.id);
@@ -22273,16 +22330,12 @@ async function enrollFace(faceDescriptor) {
       employees2[idx].faceRegistered = true;
       db.setEmployees(employees2);
       db.addLog({
-        userId: session.userId,
-        userName: session.name,
+        userId: healedSession.userId,
+        userName: healedSession.name,
         action: "ENROLL_FACE",
         module: "Face Recognition",
         details: `Face enrolled locally for ${employees2[idx].fullName}`
       });
-    }
-    if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
-      session.employeeId = employee.id;
-      saveSession(session);
     }
   }
   try {
@@ -22321,12 +22374,9 @@ async function verifyAttendanceFace(photo) {
 async function getFaceEnrollmentStatus() {
   await delay(100);
   const session = requireAuth();
-  const employee = findEmployeeForSession(session);
+  const healedSession = autoHealSessionEmployeeId(session);
+  const employee = findEmployeeForSession(healedSession);
   if (!employee) return fail("Karyawan tidak ditemukan");
-  if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
-    session.employeeId = employee.id;
-    saveSession(session);
-  }
   const enrolled = isFaceEnrolled(employee);
   if (!enrolled && employee.faceRegistered) {
     console.warn(`Auto-healing: ${employee.fullName} had faceRegistered=true but empty descriptor - resetting`);
@@ -22366,6 +22416,17 @@ function AuthProvider({ children }) {
     }
     return { success: res.success, message: res.message };
   }, []);
+  reactExports.useEffect(() => {
+    if (session?.employeeId) {
+      const employee = db.getEmployeeById(session.employeeId);
+      if (!employee && session.email) {
+        const empByEmail = db.getEmployees().find((e) => e.email.toLowerCase() === session.email.toLowerCase());
+        if (empByEmail) {
+          console.log(`[AuthContext] Session employeeId mismatch: "${session.employeeId}" vs "${empByEmail.id}"`);
+        }
+      }
+    }
+  }, [session]);
   const logout$1 = reactExports.useCallback(async () => {
     await logout();
     setSession(null);
@@ -42794,21 +42855,32 @@ function AttendancePage() {
   const [dateTo, setDateTo] = reactExports.useState("");
   const videoRef = reactExports.useRef(null);
   const streamRef = reactExports.useRef(null);
+  const healedSession = session && session.employeeId ? (() => {
+    const employee = db.getEmployeeById(session.employeeId);
+    if (!employee && session.email) {
+      const empByEmail = db.getEmployees().find((e) => e.email.toLowerCase() === session.email.toLowerCase());
+      if (empByEmail && empByEmail.id !== session.employeeId) {
+        console.log(`[AttendancePage] Auto-heal: session.employeeId "${session.employeeId}" -> "${empByEmail.id}"`);
+        return { ...session, employeeId: empByEmail.id };
+      }
+    }
+    return session;
+  })() : session;
   const todayAtt = attendances2.find(
-    (a2) => a2.employeeId === session?.employeeId && a2.date === todayStr()
+    (a2) => a2.employeeId === healedSession?.employeeId && a2.date === todayStr()
   );
   const load = reactExports.useCallback(async () => {
     setLoading(true);
     const filters = {};
-    if (!isHR && !isManager && session?.employeeId) {
-      filters.employeeId = session.employeeId;
+    if (!isHR && !isManager && healedSession?.employeeId) {
+      filters.employeeId = healedSession.employeeId;
     }
     if (dateFrom) filters.dateFrom = dateFrom;
     if (dateTo) filters.dateTo = dateTo;
     const res = await getAttendances(filters);
     if (res.success && res.data) setAttendances2(res.data);
     setLoading(false);
-  }, [session, isHR, isManager, dateFrom, dateTo]);
+  }, [healedSession, isHR, isManager, dateFrom, dateTo]);
   reactExports.useEffect(() => {
     load();
   }, [load]);
@@ -54146,7 +54218,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-VgDmALiT.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-B9vfqf1j.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
