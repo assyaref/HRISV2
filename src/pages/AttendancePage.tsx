@@ -319,7 +319,7 @@ export function AttendancePage() {
             <Button 
               onClick={submitCheck} 
               loading={checking}
-              disabled={!faceVerified && !photo}
+              disabled={!photo || !faceVerified}
             >
               {checking ? 'Memproses...' : (checkType === 'in' ? 'Konfirmasi Check In' : 'Konfirmasi Check Out')}
             </Button>

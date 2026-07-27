@@ -1,6 +1,6 @@
 /** Google Apps Script Web App transport. The URL is public by design. */
 export const GAS_API_URL = import.meta.env.VITE_GAS_API_URL ||
-  'https://script.google.com/macros/s/AKfycbyyLHD2TGa8jNvmUrvSlEVtbzgb-rOm7pzpwWZYoke--BILvksVsGDxvX96-ob3U71Sgw/exec';
+  'https://script.google.com/macros/s/AKfycbwRwzGGNXT78sH9r0lWhOmRpAfOcVPxH8ALXHdGfM1QZWCUCuDEVXJVxJjnsc-KocfU0A/exec';
 
 export async function gasRequest<T>(action: string, payload: Record<string, unknown> = {}, token = ''): Promise<T> {
   const response = await fetch(GAS_API_URL, {

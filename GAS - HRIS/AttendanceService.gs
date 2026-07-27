@@ -52,12 +52,19 @@ var AttendanceService = (function() {
         logWarn('checkIn', 'Tidak ada faceDescriptor, hanya mengandalkan stored descriptor.');
       }
     } else {
-      // ✅ faceVerified = true → langsung proses
-      logInfo('checkIn', 'faceVerified=true, skip verifikasi.');
-      // Update stored descriptor jika dikirim (opsional)
+      // faceVerified=true dari frontend — tetap verifikasi similarity dengan stored descriptor
+      logInfo('checkIn', 'faceVerified=true, verifikasi similarity dengan stored descriptor.');
+      var stored2 = getStoredDescriptor(employeeId, session.email);
+      if (!stored2) {
+        logError('checkIn', 'Tidak ada stored descriptor untuk ' + employeeId);
+        return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
+      }
       if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-        updateFaceDescriptor(employeeId, session.email, params.faceDescriptor);
-        logInfo('checkIn', 'Descriptor diperbarui untuk ' + employeeId);
+        var sim2 = compareFaceDescriptors(params.faceDescriptor, stored2);
+        if (sim2 < CONFIG.FACE_SIMILARITY_THRESHOLD) {
+          logError('checkIn', 'Similarity rendah (faceVerified path): ' + sim2);
+          return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok (' + Math.round(sim2 * 100) + '%).' };
+        }
       }
     }
 
@@ -133,10 +140,19 @@ var AttendanceService = (function() {
         logWarn('checkOut', 'Tidak ada faceDescriptor, hanya mengandalkan stored descriptor.');
       }
     } else {
-      logInfo('checkOut', 'faceVerified=true, skip verifikasi.');
+      // faceVerified=true dari frontend — tetap verifikasi similarity dengan stored descriptor
+      logInfo('checkOut', 'faceVerified=true, verifikasi similarity dengan stored descriptor.');
+      var stored3 = getStoredDescriptor(employeeId, session.email);
+      if (!stored3) {
+        logError('checkOut', 'Tidak ada stored descriptor untuk ' + employeeId);
+        return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
+      }
       if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-        updateFaceDescriptor(employeeId, session.email, params.faceDescriptor);
-        logInfo('checkOut', 'Descriptor diperbarui untuk ' + employeeId);
+        var sim3 = compareFaceDescriptors(params.faceDescriptor, stored3);
+        if (sim3 < CONFIG.FACE_SIMILARITY_THRESHOLD) {
+          logError('checkOut', 'Similarity rendah (faceVerified path): ' + sim3);
+          return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok (' + Math.round(sim3 * 100) + '%).' };
+        }
       }
     }
 
@@ -221,13 +237,14 @@ var AttendanceService = (function() {
     var sheet = getSheet('ATTENDANCE');
     if (!sheet) return;
     var row = att.row;
-    sheet.getRange(row, 4).setValue(att.checkOut);
-    sheet.getRange(row, 7).setValue(att.checkOutLat);
-    sheet.getRange(row, 8).setValue(att.checkOutLng);
-    sheet.getRange(row, 10).setValue(att.checkOutPhoto);
-    sheet.getRange(row, 12).setValue(att.status);
-    sheet.getRange(row, 13).setValue(att.workHours);
-    sheet.getRange(row, 15).setValue(att.notes);
+    // ATTENDANCE columns (1-indexed): id,employeeId,date,checkIn,checkOut,checkInLat,checkInLng,checkOutLat,checkOutLng,checkInPhoto,checkOutPhoto,status,workHours,lateMinutes,notes,createdAt
+    sheet.getRange(row, 5).setValue(att.checkOut || '');
+    sheet.getRange(row, 8).setValue(att.checkOutLat || '');
+    sheet.getRange(row, 9).setValue(att.checkOutLng || '');
+    sheet.getRange(row, 11).setValue(att.checkOutPhoto || '');
+    sheet.getRange(row, 12).setValue(att.status || '');
+    sheet.getRange(row, 13).setValue(att.workHours || '');
+    sheet.getRange(row, 15).setValue(att.notes || '');
   }
 
   function getStoredDescriptor(employeeId, optEmail) {
@@ -344,14 +361,16 @@ var AttendanceService = (function() {
   }
 
   function compareFaceDescriptors(desc1, desc2) {
-    if (!desc1 || !desc2 || desc1.length !== desc2.length) return 0;
-    var sum = 0;
-    for (var i = 0; i < desc1.length; i++) {
-      sum += Math.pow(desc1[i] - desc2[i], 2);
+    if (!desc1 || !desc2 || desc1.length === 0 || desc2.length === 0) return 0;
+    var len = Math.min(desc1.length, desc2.length);
+    var dot = 0, na = 0, nb = 0;
+    for (var i = 0; i < len; i++) {
+      dot += desc1[i] * desc2[i];
+      na += desc1[i] * desc1[i];
+      nb += desc2[i] * desc2[i];
     }
-    var dist = Math.sqrt(sum);
-    var similarity = Math.max(0, 1 - dist / 2);
-    return similarity;
+    if (na === 0 || nb === 0) return 0;
+    return Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb))));
   }
 
   function calculateLateMinutes(timeStr) {

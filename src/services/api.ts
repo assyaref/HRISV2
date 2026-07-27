@@ -18,6 +18,7 @@ import {
   calcLeaveDays,
   isBirthdayThisMonth,
   haversineDistance,
+  hashPassword,
 } from '../lib/utils';
 import type {
   ApiResponse,
@@ -197,6 +198,7 @@ export async function login(email: string, password: string, remember = false): 
         password,
         remember,
       });
+      console.log('[Login] GAS response:', result);
 
       if (result.success && result.data) {
         const healedSession = autoHealSessionEmployeeId(result.data);
@@ -204,22 +206,28 @@ export async function login(email: string, password: string, remember = false): 
         saveSession(healedSession);
         return { ...result, data: healedSession };
       }
-      // GAS returned a proper fail response (wrong password, etc) — return as-is
-      return result;
+      // GAS returned a business error (wrong password, inactive, etc) — return as-is
+      // Only fall through to local if GAS itself failed (network/throw)
+      if (result.message && !result.message.toLowerCase().includes('server error')) {
+        return result;
+      }
     } catch (error) {
-      console.warn('GAS login network error, trying local fallback:', error);
+      console.warn('[Login] GAS unreachable, trying local fallback:', error);
     }
   }
 
   // Fallback ke localStorage
   await delay();
   const user = db.getUserByEmail(email);
-  if (!user || user.password !== password) {
-    return fail('Email atau password salah');
-  }
-  if (!user.isActive) {
-    return fail('Akun Anda dinonaktifkan. Hubungi administrator.');
-  }
+  if (!user) return fail('Email atau password salah');
+
+  // Support plaintext dan SHA-256 hash — sama seperti GAS Auth.gs
+  const inputHash = await hashPassword(password);
+  const stored = String(user.password || '');
+  const passwordMatch = stored === inputHash || stored === password;
+  if (!passwordMatch) return fail('Email atau password salah');
+
+  if (!user.isActive) return fail('Akun Anda dinonaktifkan. Hubungi administrator.');
   const token = generateToken();
   const expiresAt = Date.now() + (remember ? 30 : 1) * 24 * 60 * 60 * 1000;
   
@@ -672,19 +680,33 @@ async function resolveLocalFaceVerification(
     };
   }
 
-  // Jika sudah diverifikasi oleh client (dari capturePhoto), langsung lanjut
-  if (payload.faceVerified && payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-    return { success: true, message: 'OK', descriptor: payload.faceDescriptor };
+  // Parse enrolled descriptor
+  let enrolledDescriptor: number[];
+  try {
+    enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
+  } catch {
+    return { success: false, message: 'Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.' };
+  }
+  if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
+    return { success: false, message: 'Data wajah tidak valid. Silakan daftarkan ulang.' };
+  }
+
+  // Jika ada descriptor dari live capture, verifikasi similarity dengan enrolled
+  if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
+    const a = payload.faceDescriptor;
+    const b = enrolledDescriptor;
+    let dot = 0, na = 0, nb = 0;
+    const len = Math.min(a.length, b.length);
+    for (let i = 0; i < len; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+    const sim = (na && nb) ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
+    if (sim < 0.55) {
+      return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim*100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
+    }
+    return { success: true, message: 'OK', descriptor: enrolledDescriptor };
   }
 
   // Verifikasi dari foto jika ada
   if (payload.photo) {
-    let enrolledDescriptor: number[];
-    try {
-      enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
-    } catch {
-      return { success: false, message: 'Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.' };
-    }
     const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
     if (!result.matched) {
       return { success: false, message: result.message || 'Verifikasi wajah gagal. Wajah tidak cocok.' };
@@ -692,7 +714,7 @@ async function resolveLocalFaceVerification(
     return { success: true, message: 'OK', descriptor: enrolledDescriptor };
   }
 
-  // Tidak ada foto dan belum verified — tolak
+  // Tidak ada foto dan tidak ada descriptor — tolak
   return { success: false, message: 'Foto wajah diperlukan untuk absensi.' };
 }
 

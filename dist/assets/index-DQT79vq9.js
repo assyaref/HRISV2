@@ -14957,7 +14957,7 @@ function useViewTransitionState(to2, { relative } = {}) {
   let nextPath = stripBasename(vtContext.nextLocation.pathname, basename) || vtContext.nextLocation.pathname;
   return matchPath(path.pathname, nextPath) != null || matchPath(path.pathname, currentPath) != null;
 }
-const GAS_API_URL = "https://script.google.com/macros/s/AKfycbzmx1akP2txv49TaAZpqrW4UqJnxzxHQ0f0LozSxk1xw3-DhbPuMJE7qqKOXenIx4klLw/exec";
+const GAS_API_URL = "https://script.google.com/macros/s/AKfycbwRwzGGNXT78sH9r0lWhOmRpAfOcVPxH8ALXHdGfM1QZWCUCuDEVXJVxJjnsc-KocfU0A/exec";
 async function gasRequest(action, payload = {}, token = "") {
   const response = await fetch(GAS_API_URL, {
     method: "POST",
@@ -15486,10 +15486,10 @@ const activityLogs = [
   { id: "log-3", userId: "usr-3", userName: "Ahmad Rizki", action: "APPROVE", module: "Leave", details: "Approved leave leave-3", createdAt: daysAgo(3) + "T14:00:00Z" }
 ];
 const DEMO_ACCOUNTS = [
-  { email: "admin@hrislite.com", password: "<admin_password>", role: "Administrator" },
-  { email: "hr@hrislite.com", password: "<hr_password>", role: "HR" },
-  { email: "manager@hrislite.com", password: "<manager_password>", role: "Manager" },
-  { email: "employee@hrislite.com", password: "<employee_password>", role: "Employee" }
+  { email: "admin@hrislite.com", password: "admin123", role: "Administrator" },
+  { email: "hr@hrislite.com", password: "hr123", role: "HR" },
+  { email: "manager@hrislite.com", password: "manager123", role: "Manager" },
+  { email: "employee@hrislite.com", password: "employee123", role: "Employee" }
 ];
 const KEYS = {
   users: "users",
@@ -21207,6 +21207,12 @@ function getCurrentPosition() {
     });
   });
 }
+async function hashPassword(password) {
+  const msgBuffer = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b2) => b2.toString(16).padStart(2, "0")).join("");
+}
 function exportToExcel(data, filename) {
   __vitePreload(() => import("./xlsx-D6h3nj8f.js"), true ? [] : void 0, import.meta.url).then((XLSX) => {
     const ws = XLSX.utils.json_to_sheet(data);
@@ -21326,25 +21332,28 @@ async function login(email, password, remember = false) {
         password,
         remember
       });
+      console.log("[Login] GAS response:", result);
       if (result.success && result.data) {
         const healedSession = autoHealSessionEmployeeId(result.data);
         if (result.token) healedSession.token = result.token;
         saveSession(healedSession);
         return { ...result, data: healedSession };
       }
-      return result;
+      if (result.message && !result.message.toLowerCase().includes("server error")) {
+        return result;
+      }
     } catch (error2) {
-      console.warn("GAS login network error, trying local fallback:", error2);
+      console.warn("[Login] GAS unreachable, trying local fallback:", error2);
     }
   }
   await delay();
   const user = db.getUserByEmail(email);
-  if (!user || user.password !== password) {
-    return fail("Email atau password salah");
-  }
-  if (!user.isActive) {
-    return fail("Akun Anda dinonaktifkan. Hubungi administrator.");
-  }
+  if (!user) return fail("Email atau password salah");
+  const inputHash = await hashPassword(password);
+  const stored = String(user.password || "");
+  const passwordMatch = stored === inputHash || stored === password;
+  if (!passwordMatch) return fail("Email atau password salah");
+  if (!user.isActive) return fail("Akun Anda dinonaktifkan. Hubungi administrator.");
   const token = generateToken();
   const expiresAt = Date.now() + (remember ? 30 : 1) * 24 * 60 * 60 * 1e3;
   let employeeId = user.employeeId || "";
@@ -21706,16 +21715,32 @@ async function resolveLocalFaceVerification(payload) {
       message: "Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID."
     };
   }
-  if (payload.faceVerified && payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-    return { success: true, message: "OK", descriptor: payload.faceDescriptor };
+  let enrolledDescriptor;
+  try {
+    enrolledDescriptor = JSON.parse(employee.faceDescriptor);
+  } catch {
+    return { success: false, message: "Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID." };
+  }
+  if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
+    return { success: false, message: "Data wajah tidak valid. Silakan daftarkan ulang." };
+  }
+  if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
+    const a2 = payload.faceDescriptor;
+    const b2 = enrolledDescriptor;
+    let dot = 0, na = 0, nb = 0;
+    const len = Math.min(a2.length, b2.length);
+    for (let i2 = 0; i2 < len; i2++) {
+      dot += a2[i2] * b2[i2];
+      na += a2[i2] * a2[i2];
+      nb += b2[i2] * b2[i2];
+    }
+    const sim = na && nb ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
+    if (sim < 0.55) {
+      return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim * 100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
+    }
+    return { success: true, message: "OK", descriptor: enrolledDescriptor };
   }
   if (payload.photo) {
-    let enrolledDescriptor;
-    try {
-      enrolledDescriptor = JSON.parse(employee.faceDescriptor);
-    } catch {
-      return { success: false, message: "Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID." };
-    }
     const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
     if (!result.matched) {
       return { success: false, message: result.message || "Verifikasi wajah gagal. Wajah tidak cocok." };
@@ -43130,7 +43155,7 @@ function AttendancePage() {
             {
               onClick: submitCheck,
               loading: checking,
-              disabled: !faceVerified && !photo,
+              disabled: !photo || !faceVerified,
               children: checking ? "Memproses..." : checkType === "in" ? "Konfirmasi Check In" : "Konfirmasi Check Out"
             }
           )
@@ -54225,7 +54250,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-Du97Ljq8.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-B9vJOb22.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
