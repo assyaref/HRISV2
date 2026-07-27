@@ -28,6 +28,15 @@ export function FaceEnrollmentPage() {
   const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null)
     || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null); 
 
+  // Auto-heal session.employeeId if mismatch
+  useEffect(() => {
+    if (session && employee && session.employeeId !== employee.id) {
+      // This will be handled by api.enrollFace which calls autoHealSessionEmployeeId
+      // But we can also log it here for debugging
+      console.log(`[FaceEnrollment] Session employeeId mismatch: "${session.employeeId}" vs "${employee.id}"`);
+    }
+  }, [session, employee]); 
+
   // Properly release camera resources
   const releaseCamera = useCallback(() => {
     try {

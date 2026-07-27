@@ -33,22 +33,35 @@ export function AttendancePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  // Auto-heal session.employeeId before using it
+  const healedSession = session && session.employeeId ? (() => {
+    const employee = db.getEmployeeById(session.employeeId);
+    if (!employee && session.email) {
+      const empByEmail = db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase());
+      if (empByEmail && empByEmail.id !== session.employeeId) {
+        console.log(`[AttendancePage] Auto-heal: session.employeeId "${session.employeeId}" -> "${empByEmail.id}"`);
+        return { ...session, employeeId: empByEmail.id };
+      }
+    }
+    return session;
+  })() : session;
+
   const todayAtt = attendances.find(
-    (a) => a.employeeId === session?.employeeId && a.date === todayStr()
+    (a) => a.employeeId === healedSession?.employeeId && a.date === todayStr()
   );
 
   const load = useCallback(async () => {
     setLoading(true);
     const filters: { employeeId?: string; dateFrom?: string; dateTo?: string } = {};
-    if (!isHR && !isManager && session?.employeeId) {
-      filters.employeeId = session.employeeId;
+    if (!isHR && !isManager && healedSession?.employeeId) {
+      filters.employeeId = healedSession.employeeId;
     }
     if (dateFrom) filters.dateFrom = dateFrom;
     if (dateTo) filters.dateTo = dateTo;
     const res = await api.getAttendances(filters);
     if (res.success && res.data) setAttendances(res.data);
     setLoading(false);
-  }, [session, isHR, isManager, dateFrom, dateTo]);
+  }, [healedSession, isHR, isManager, dateFrom, dateTo]);
 
   useEffect(() => {
     load();

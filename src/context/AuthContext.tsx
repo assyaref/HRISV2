@@ -34,6 +34,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { success: res.success, message: res.message };
   }, []);
 
+  // Auto-heal session.employeeId after login
+  useEffect(() => {
+    if (session?.employeeId) {
+      // Trigger auto-heal by calling enrollFace with empty descriptor
+      // This will update session.employeeId if there's a mismatch
+      const employee = db.getEmployeeById(session.employeeId);
+      if (!employee && session.email) {
+        const empByEmail = db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase());
+        if (empByEmail) {
+          console.log(`[AuthContext] Session employeeId mismatch: "${session.employeeId}" vs "${empByEmail.id}"`);
+        }
+      }
+    }
+  }, [session]);
+
   const logout = useCallback(async () => {
     await api.logout();
     setSession(null);

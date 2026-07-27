@@ -140,6 +140,22 @@ function findEmployeeForSession(session: Session): Employee | undefined {
 }
 
 /**
+ * Auto-heal session.employeeId to match EMPLOYEE sheet
+ * This fixes the mismatch between USERS.employeeId and EMPLOYEE.employeeId
+ */
+function autoHealSessionEmployeeId(session: Session): Session {
+  const employee = findEmployeeForSession(session);
+  if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
+    // Update session to use Employee.id (the correct ID for face lookup)
+    const healedSession = { ...session, employeeId: employee.id };
+    saveSession(healedSession);
+    console.log(`[Auto-Heal] Updated session.employeeId: "${session.employeeId}" → "${employee.id}" for ${employee.fullName}`);
+    return healedSession;
+  }
+  return session;
+}
+
+/**
  * Validasi apakah faceDescriptor benar-benar valid
  */
 function isFaceEnrolled(employee: { faceDescriptor?: string; faceRegistered?: boolean } | null | undefined): boolean {
@@ -183,7 +199,14 @@ export async function login(email: string, password: string, remember = false): 
       });
       
       if (result.success && result.data) {
-        saveSession(result.data);
+        // Auto-heal session.employeeId for GAS backend
+        const healedSession = autoHealSessionEmployeeId(result.data);
+        saveSession(healedSession);
+        if (result.token) {
+          healedSession.token = result.token;
+          saveSession(healedSession);
+        }
+        return { ...result, data: healedSession };
       }
       if (result.success && result.token && result.data) {
         // Pastikan token juga ada di data session
@@ -207,13 +230,22 @@ export async function login(email: string, password: string, remember = false): 
   }
   const token = generateToken();
   const expiresAt = Date.now() + (remember ? 30 : 1) * 24 * 60 * 60 * 1000;
+  
+  // Auto-heal: Find employee by email and use Employee.id as employeeId
+  let employeeId = user.employeeId || '';
+  const employee = db.getEmployees().find(e => e.email.toLowerCase() === email.toLowerCase());
+  if (employee && employee.id) {
+    employeeId = employee.id;
+    console.log(`[Auto-Heal] Updated session.employeeId: "${user.employeeId}" → "${employeeId}" for ${email}`);
+  }
+  
   const session: Session = {
     token,
     userId: user.id,
     email: user.email,
     role: user.role,
     name: user.name,
-    employeeId: user.employeeId,
+    employeeId: employeeId,
     avatar: user.avatar,
     expiresAt,
   };
@@ -668,14 +700,17 @@ export async function checkIn(payload: {
     await delay(400);
     const session = requireAuth();
 
+    // Auto-heal session.employeeId before processing
+    const healedSession = autoHealSessionEmployeeId(session);
+    
     const today = todayStr();
     const list = db.getAttendances();
-    const existing = list.find((a) => a.employeeId === (session.employeeId || '') && a.date === today);
+    const existing = list.find((a) => a.employeeId === (healedSession.employeeId || '') && a.date === today);
     if (existing?.checkIn) return fail('Anda sudah check-in hari ini') as ApiResponse<Attendance>;
 
     // Multi-strategy employee lookup
-    const employee = findEmployeeForSession(session);
-    const employeeIdForAtt = employee?.id || session.employeeId || '';
+    const employee = findEmployeeForSession(healedSession);
+    const employeeIdForAtt = employee?.id || healedSession.employeeId || '';
 
     if (!employeeIdForAtt) {
       return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
@@ -729,7 +764,7 @@ export async function checkIn(payload: {
     };
     list.push(att);
     db.setAttendances(list);
-    db.addLog({ userId: session.userId, userName: session.name, action: 'CHECK_IN', module: 'Attendance', details: `Check-in at ${checkInTime}` });
+    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: 'CHECK_IN', module: 'Attendance', details: `Check-in at ${checkInTime}` });
     return ok(att, 'Check-in berhasil');
   }
 }
@@ -753,12 +788,15 @@ export async function checkOut(payload: {
     await delay(400);
     const session = requireAuth();
 
+    // Auto-heal session.employeeId before processing
+    const healedSession = autoHealSessionEmployeeId(session);
+
     const today = todayStr();
     const list = db.getAttendances();
 
     // Multi-strategy employee lookup
-    const employee = findEmployeeForSession(session);
-    const employeeIdForAtt = employee?.id || session.employeeId || '';
+    const employee = findEmployeeForSession(healedSession);
+    const employeeIdForAtt = employee?.id || healedSession.employeeId || '';
 
     if (!employeeIdForAtt) {
       return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
@@ -813,7 +851,7 @@ export async function checkOut(payload: {
       workHours,
     };
     db.setAttendances(list);
-    db.addLog({ userId: session.userId, userName: session.name, action: 'CHECK_OUT', module: 'Attendance', details: `Work hours: ${workHours}h` });
+    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: 'CHECK_OUT', module: 'Attendance', details: `Work hours: ${workHours}h` });
     return ok(list[idx], 'Check-out berhasil');
   }
 }
@@ -1340,8 +1378,11 @@ export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse>
 
   const session = requireAuth();
 
+  // Auto-heal session.employeeId before enrollment
+  const healedSession = autoHealSessionEmployeeId(session);
+
   // Multi-strategy employee lookup (mirrors FaceService.gs)
-  const employee = findEmployeeForSession(session);
+  const employee = findEmployeeForSession(healedSession);
   if (employee) {
     const employees = db.getEmployees();
     const idx = employees.findIndex((e) => e.id === employee.id);
@@ -1351,16 +1392,10 @@ export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse>
       employees[idx].faceRegistered = true;
       db.setEmployees(employees);
       db.addLog({
-        userId: session.userId, userName: session.name,
+        userId: healedSession.userId, userName: healedSession.name,
         action: 'ENROLL_FACE', module: 'Face Recognition',
         details: `Face enrolled locally for ${employees[idx].fullName}`
       });
-    }
-
-    // Auto-heal session.employeeId for future lookups
-    if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
-      session.employeeId = employee.id;
-      saveSession(session);
     }
   }
 
@@ -1413,14 +1448,11 @@ export async function getFaceEnrollmentStatus(): Promise<ApiResponse<{ enrolled:
   await delay(100);
   const session = requireAuth();
 
-  const employee = findEmployeeForSession(session);
-  if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
+  // Auto-heal session.employeeId before status check
+  const healedSession = autoHealSessionEmployeeId(session);
 
-  // Auto-heal session.employeeId for future lookups
-  if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
-    session.employeeId = employee.id;
-    saveSession(session);
-  }
+  const employee = findEmployeeForSession(healedSession);
+  if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
 
   // Validasi descriptor - konsisten dengan GAS UserService.gs
   const enrolled = isFaceEnrolled(employee);

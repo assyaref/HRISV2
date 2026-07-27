@@ -42,19 +42,28 @@ var AuthService = {
     var hours = remember ? 720 : CONFIG.SESSION_HOURS; // 30 days if remember
     var expiresAt = Date.now() + hours * 60 * 60 * 1000;
 
+    // Auto-heal: Find employee by email and use Employee.id as employeeId
+    var employeeId = user.employeeId || '';
+    var employee = findByField(CONFIG.SHEETS.EMPLOYEE, 'email', email);
+    if (employee && employee.id) {
+      // Use Employee.id (internal ID) as employeeId for face lookup
+      employeeId = employee.id;
+      Logger.log('[Auth] Auto-heal: employeeId="' + user.employeeId + '" -> "' + employeeId + '" for ' + email);
+    }
+
     var session = {
       token: token,
       userId: user.id,
       email: user.email,
       role: user.role,
       name: user.name,
-      employeeId: user.employeeId || '',
+      employeeId: employeeId,
       avatar: user.avatar || '',
       expiresAt: expiresAt
     };
 
     appendObject(CONFIG.SHEETS.SESSIONS, session);
-    addLog(user.id, user.name, 'LOGIN', 'Auth', 'Successful login');
+    addLog(user.id, user.name, 'LOGIN', 'Auth', 'Successful login (employeeId=' + employeeId + ')');
 
     return {
       success: true,
