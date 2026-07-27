@@ -21749,17 +21749,26 @@ async function getAttendances(filters) {
     return ok(list);
   }
 }
+function isGASFaceError(msg) {
+  const m2 = msg.toLowerCase();
+  return m2.includes("belum terdaftar") || m2.includes("wajah") || m2.includes("face") || m2.includes("descriptor");
+}
 async function checkIn(payload) {
+  const localVerified = await resolveLocalFaceVerification(payload);
+  if (!localVerified.success) return localVerified;
   try {
-    const localVerified = await resolveLocalFaceVerification(payload);
-    if (!localVerified.success) return localVerified;
-    return await callAPI("checkin", {
+    const gasResult = await callAPI("checkin", {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || "",
-      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceDescriptor: localVerified.descriptor || [],
       faceVerified: true
     });
+    if (!gasResult.success && isGASFaceError(gasResult.message || "")) {
+      console.warn("[checkIn] GAS face error, fallback to local:", gasResult.message);
+      throw new Error("fallback");
+    }
+    return gasResult;
   } catch {
     await delay(400);
     const session = requireAuth();
@@ -21819,16 +21828,21 @@ async function checkIn(payload) {
   }
 }
 async function checkOut(payload) {
+  const localVerified = await resolveLocalFaceVerification(payload);
+  if (!localVerified.success) return localVerified;
   try {
-    const localVerified = await resolveLocalFaceVerification(payload);
-    if (!localVerified.success) return localVerified;
-    return await callAPI("checkout", {
+    const gasResult = await callAPI("checkout", {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || "",
-      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceDescriptor: localVerified.descriptor || [],
       faceVerified: true
     });
+    if (!gasResult.success && isGASFaceError(gasResult.message || "")) {
+      console.warn("[checkOut] GAS face error, fallback to local:", gasResult.message);
+      throw new Error("fallback");
+    }
+    return gasResult;
   } catch {
     await delay(400);
     const session = requireAuth();
@@ -54218,7 +54232,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-B9vfqf1j.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-DfIYSxeN.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -59095,9 +59109,6 @@ if ("serviceWorker" in navigator) {
     }
   });
 }
-navigator.serviceWorker?.addEventListener("controllerchange", () => {
-  window.location.reload();
-});
 export {
   _typeof as _
 };

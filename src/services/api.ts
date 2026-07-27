@@ -727,6 +727,11 @@ export async function getAttendances(filters?: {
   }
 }
 
+function isGASFaceError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return m.includes('belum terdaftar') || m.includes('wajah') || m.includes('face') || m.includes('descriptor');
+}
+
 export async function checkIn(payload: {
   lat?: number;
   lng?: number;
@@ -734,19 +739,23 @@ export async function checkIn(payload: {
   faceDescriptor?: number[];
   faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
-  try {
-    // Lakukan verifikasi wajah lokal sebelum kirim ke GAS
-    // Ini memastikan GAS menerima faceVerified=true sehingga bypass cek Spreadsheet
-    const localVerified = await resolveLocalFaceVerification(payload);
-    if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
+  // Verifikasi lokal dulu — tolak langsung jika wajah belum terdaftar di localStorage
+  const localVerified = await resolveLocalFaceVerification(payload);
+  if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
 
-    return await callAPI<Attendance>('checkin', {
+  try {
+    const gasResult = await callAPI<Attendance>('checkin', {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || '',
-      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceDescriptor: localVerified.descriptor || [],
       faceVerified: true,
     });
+    if (!gasResult.success && isGASFaceError(gasResult.message || '')) {
+      console.warn('[checkIn] GAS face error, fallback to local:', gasResult.message);
+      throw new Error('fallback');
+    }
+    return gasResult;
   } catch {
     await delay(400);
     const session = requireAuth();
@@ -827,17 +836,22 @@ export async function checkOut(payload: {
   faceDescriptor?: number[];
   faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
-  try {
-    const localVerified = await resolveLocalFaceVerification(payload);
-    if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
+  const localVerified = await resolveLocalFaceVerification(payload);
+  if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
 
-    return await callAPI<Attendance>('checkout', {
+  try {
+    const gasResult = await callAPI<Attendance>('checkout', {
       lat: payload.lat || 0,
       lng: payload.lng || 0,
       photo: payload.photo || '',
-      faceDescriptor: localVerified.descriptor || payload.faceDescriptor || [],
+      faceDescriptor: localVerified.descriptor || [],
       faceVerified: true,
     });
+    if (!gasResult.success && isGASFaceError(gasResult.message || '')) {
+      console.warn('[checkOut] GAS face error, fallback to local:', gasResult.message);
+      throw new Error('fallback');
+    }
+    return gasResult;
   } catch {
     await delay(400);
     const session = requireAuth();
