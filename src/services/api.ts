@@ -660,62 +660,78 @@ export async function deletePosition(id: string): Promise<ApiResponse> {
 // ========== ATTENDANCE ==========
 
 /**
- * Verifikasi wajah secara lokal menggunakan descriptor dari localStorage.
- * Dipanggil sebelum kirim ke GAS agar GAS menerima faceVerified=true.
- * Ini mengatasi kasus di mana descriptor belum tersimpan di Google Spreadsheet.
+ * Cosine similarity antara dua descriptor
+ */
+function cosineSim(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < len; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+  return (na && nb) ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
+}
+
+/**
+ * Verifikasi wajah sebelum check-in/out.
+ * - Jika localStorage punya descriptor → verifikasi similarity lokal
+ * - Jika localStorage kosong (device baru / belum enroll lokal) → cek GAS punya descriptor
+ *   dengan mengirim faceVerified=true + descriptor ke GAS untuk diverifikasi di sana
  */
 async function resolveLocalFaceVerification(
   payload: { photo?: string; faceDescriptor?: number[]; faceVerified?: boolean }
-): Promise<{ success: boolean; message: string; descriptor?: number[] }> {
+): Promise<{ success: boolean; message: string; descriptor?: number[]; skipLocalVerify?: boolean }> {
   const session = getSession();
   if (!session) return { success: false, message: 'Sesi tidak valid. Silakan login kembali.' };
 
+  // Wajib ada foto atau descriptor dari kamera
+  if (!payload.photo && (!payload.faceDescriptor || payload.faceDescriptor.length === 0)) {
+    return { success: false, message: 'Foto wajah diperlukan untuk absensi.' };
+  }
+
   const employee = findEmployeeForSession(session);
+  const hasLocalDescriptor = isFaceEnrolled(employee);
 
-  // Cek wajah terdaftar di localStorage
-  if (!isFaceEnrolled(employee)) {
-    return {
-      success: false,
-      message: 'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.',
-    };
+  if (hasLocalDescriptor) {
+    // Verifikasi similarity lokal
+    let enrolledDescriptor: number[];
+    try {
+      enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
+    } catch {
+      return { success: false, message: 'Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.' };
+    }
+    if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
+      return { success: false, message: 'Data wajah tidak valid. Silakan daftarkan ulang.' };
+    }
+
+    // Verifikasi dengan descriptor dari live capture
+    if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
+      const sim = cosineSim(payload.faceDescriptor, enrolledDescriptor);
+      if (sim < 0.55) {
+        return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim*100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
+      }
+      return { success: true, message: 'OK', descriptor: enrolledDescriptor };
+    }
+
+    // Verifikasi dari foto
+    if (payload.photo) {
+      const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
+      if (!result.matched) {
+        return { success: false, message: result.message || 'Verifikasi wajah gagal. Wajah tidak cocok.' };
+      }
+      return { success: true, message: 'OK', descriptor: enrolledDescriptor };
+    }
   }
 
-  // Parse enrolled descriptor
-  let enrolledDescriptor: number[];
-  try {
-    enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
-  } catch {
-    return { success: false, message: 'Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.' };
-  }
-  if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-    return { success: false, message: 'Data wajah tidak valid. Silakan daftarkan ulang.' };
-  }
-
-  // Jika ada descriptor dari live capture, verifikasi similarity dengan enrolled
+  // localStorage kosong — descriptor hanya ada di GAS Spreadsheet
+  // Kirim descriptor live ke GAS, biarkan GAS yang verifikasi similarity
   if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-    const a = payload.faceDescriptor;
-    const b = enrolledDescriptor;
-    let dot = 0, na = 0, nb = 0;
-    const len = Math.min(a.length, b.length);
-    for (let i = 0; i < len; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
-    const sim = (na && nb) ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
-    if (sim < 0.55) {
-      return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim*100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
-    }
-    return { success: true, message: 'OK', descriptor: enrolledDescriptor };
+    console.log('[FaceVerify] No local descriptor, delegating verification to GAS');
+    return { success: true, message: 'OK', descriptor: payload.faceDescriptor, skipLocalVerify: true };
   }
 
-  // Verifikasi dari foto jika ada
-  if (payload.photo) {
-    const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
-    if (!result.matched) {
-      return { success: false, message: result.message || 'Verifikasi wajah gagal. Wajah tidak cocok.' };
-    }
-    return { success: true, message: 'OK', descriptor: enrolledDescriptor };
-  }
-
-  // Tidak ada foto dan tidak ada descriptor — tolak
-  return { success: false, message: 'Foto wajah diperlukan untuk absensi.' };
+  // Tidak ada descriptor sama sekali — tolak
+  return {
+    success: false,
+    message: 'Wajah Anda belum terdaftar di perangkat ini. Silakan daftarkan wajah terlebih dahulu di menu Face ID.',
+  };
 }
 
 export async function getAttendances(filters?: {
@@ -753,24 +769,42 @@ export async function checkIn(payload: {
   faceDescriptor?: number[];
   faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
-  // Verifikasi lokal dulu — tolak langsung jika wajah belum terdaftar di localStorage
   const localVerified = await resolveLocalFaceVerification(payload);
   if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
 
+  // Jika skipLocalVerify=true, descriptor hanya ada di GAS — kirim ke GAS tanpa faceVerified=true
+  // agar GAS tetap verifikasi similarity dengan stored descriptor di Spreadsheet
+  const gasPayload = localVerified.skipLocalVerify
+    ? {
+        lat: payload.lat || 0,
+        lng: payload.lng || 0,
+        photo: payload.photo || '',
+        faceDescriptor: localVerified.descriptor || [],
+        faceVerified: false, // paksa GAS verifikasi similarity
+      }
+    : {
+        lat: payload.lat || 0,
+        lng: payload.lng || 0,
+        photo: payload.photo || '',
+        faceDescriptor: localVerified.descriptor || [],
+        faceVerified: true,
+      };
+
   try {
-    const gasResult = await callAPI<Attendance>('checkin', {
-      lat: payload.lat || 0,
-      lng: payload.lng || 0,
-      photo: payload.photo || '',
-      faceDescriptor: localVerified.descriptor || [],
-      faceVerified: true,
-    });
+    const gasResult = await callAPI<Attendance>('checkin', gasPayload);
     if (!gasResult.success && isGASFaceError(gasResult.message || '')) {
       console.warn('[checkIn] GAS face error, fallback to local:', gasResult.message);
+      if (localVerified.skipLocalVerify) {
+        // Descriptor tidak ada di GAS maupun localStorage — benar-benar belum enroll
+        return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
+      }
       throw new Error('fallback');
     }
     return gasResult;
-  } catch {
+  } catch (err: unknown) {
+    if (localVerified.skipLocalVerify && (err as Error)?.message !== 'fallback') {
+      return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
+    }
     await delay(400);
     const session = requireAuth();
 
@@ -853,20 +887,36 @@ export async function checkOut(payload: {
   const localVerified = await resolveLocalFaceVerification(payload);
   if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
 
+  const gasPayload = localVerified.skipLocalVerify
+    ? {
+        lat: payload.lat || 0,
+        lng: payload.lng || 0,
+        photo: payload.photo || '',
+        faceDescriptor: localVerified.descriptor || [],
+        faceVerified: false,
+      }
+    : {
+        lat: payload.lat || 0,
+        lng: payload.lng || 0,
+        photo: payload.photo || '',
+        faceDescriptor: localVerified.descriptor || [],
+        faceVerified: true,
+      };
+
   try {
-    const gasResult = await callAPI<Attendance>('checkout', {
-      lat: payload.lat || 0,
-      lng: payload.lng || 0,
-      photo: payload.photo || '',
-      faceDescriptor: localVerified.descriptor || [],
-      faceVerified: true,
-    });
+    const gasResult = await callAPI<Attendance>('checkout', gasPayload);
     if (!gasResult.success && isGASFaceError(gasResult.message || '')) {
       console.warn('[checkOut] GAS face error, fallback to local:', gasResult.message);
+      if (localVerified.skipLocalVerify) {
+        return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
+      }
       throw new Error('fallback');
     }
     return gasResult;
-  } catch {
+  } catch (err: unknown) {
+    if (localVerified.skipLocalVerify && (err as Error)?.message !== 'fallback') {
+      return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
+    }
     await delay(400);
     const session = requireAuth();
 

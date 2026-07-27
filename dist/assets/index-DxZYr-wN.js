@@ -21705,49 +21705,57 @@ async function deletePosition(id2) {
     return ok(null, "Jabatan dihapus");
   }
 }
+function cosineSim(a2, b2) {
+  const len = Math.min(a2.length, b2.length);
+  let dot = 0, na = 0, nb = 0;
+  for (let i2 = 0; i2 < len; i2++) {
+    dot += a2[i2] * b2[i2];
+    na += a2[i2] * a2[i2];
+    nb += b2[i2] * b2[i2];
+  }
+  return na && nb ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
+}
 async function resolveLocalFaceVerification(payload) {
   const session = getSession();
   if (!session) return { success: false, message: "Sesi tidak valid. Silakan login kembali." };
+  if (!payload.photo && (!payload.faceDescriptor || payload.faceDescriptor.length === 0)) {
+    return { success: false, message: "Foto wajah diperlukan untuk absensi." };
+  }
   const employee = findEmployeeForSession(session);
-  if (!isFaceEnrolled(employee)) {
-    return {
-      success: false,
-      message: "Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID."
-    };
-  }
-  let enrolledDescriptor;
-  try {
-    enrolledDescriptor = JSON.parse(employee.faceDescriptor);
-  } catch {
-    return { success: false, message: "Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID." };
-  }
-  if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-    return { success: false, message: "Data wajah tidak valid. Silakan daftarkan ulang." };
+  const hasLocalDescriptor = isFaceEnrolled(employee);
+  if (hasLocalDescriptor) {
+    let enrolledDescriptor;
+    try {
+      enrolledDescriptor = JSON.parse(employee.faceDescriptor);
+    } catch {
+      return { success: false, message: "Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID." };
+    }
+    if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
+      return { success: false, message: "Data wajah tidak valid. Silakan daftarkan ulang." };
+    }
+    if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
+      const sim = cosineSim(payload.faceDescriptor, enrolledDescriptor);
+      if (sim < 0.55) {
+        return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim * 100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
+      }
+      return { success: true, message: "OK", descriptor: enrolledDescriptor };
+    }
+    if (payload.photo) {
+      const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
+      if (!result.matched) {
+        return { success: false, message: result.message || "Verifikasi wajah gagal. Wajah tidak cocok." };
+      }
+      return { success: true, message: "OK", descriptor: enrolledDescriptor };
+    }
   }
   if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-    const a2 = payload.faceDescriptor;
-    const b2 = enrolledDescriptor;
-    let dot = 0, na = 0, nb = 0;
-    const len = Math.min(a2.length, b2.length);
-    for (let i2 = 0; i2 < len; i2++) {
-      dot += a2[i2] * b2[i2];
-      na += a2[i2] * a2[i2];
-      nb += b2[i2] * b2[i2];
-    }
-    const sim = na && nb ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
-    if (sim < 0.55) {
-      return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim * 100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
-    }
-    return { success: true, message: "OK", descriptor: enrolledDescriptor };
+    console.log("[FaceVerify] No local descriptor, delegating verification to GAS");
+    return { success: true, message: "OK", descriptor: payload.faceDescriptor, skipLocalVerify: true };
   }
-  if (payload.photo) {
-    const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
-    if (!result.matched) {
-      return { success: false, message: result.message || "Verifikasi wajah gagal. Wajah tidak cocok." };
-    }
-    return { success: true, message: "OK", descriptor: enrolledDescriptor };
-  }
-  return { success: false, message: "Foto wajah diperlukan untuk absensi." };
+  return {
+    success: false,
+    message: "Wajah Anda belum terdaftar di perangkat ini. Silakan daftarkan wajah terlebih dahulu di menu Face ID."
+  };
 }
 async function getAttendances(filters) {
   try {
@@ -21774,20 +21782,34 @@ function isGASFaceError(msg) {
 async function checkIn(payload) {
   const localVerified = await resolveLocalFaceVerification(payload);
   if (!localVerified.success) return localVerified;
+  const gasPayload = localVerified.skipLocalVerify ? {
+    lat: payload.lat || 0,
+    lng: payload.lng || 0,
+    photo: payload.photo || "",
+    faceDescriptor: localVerified.descriptor || [],
+    faceVerified: false
+    // paksa GAS verifikasi similarity
+  } : {
+    lat: payload.lat || 0,
+    lng: payload.lng || 0,
+    photo: payload.photo || "",
+    faceDescriptor: localVerified.descriptor || [],
+    faceVerified: true
+  };
   try {
-    const gasResult = await callAPI("checkin", {
-      lat: payload.lat || 0,
-      lng: payload.lng || 0,
-      photo: payload.photo || "",
-      faceDescriptor: localVerified.descriptor || [],
-      faceVerified: true
-    });
+    const gasResult = await callAPI("checkin", gasPayload);
     if (!gasResult.success && isGASFaceError(gasResult.message || "")) {
       console.warn("[checkIn] GAS face error, fallback to local:", gasResult.message);
+      if (localVerified.skipLocalVerify) {
+        return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
+      }
       throw new Error("fallback");
     }
     return gasResult;
-  } catch {
+  } catch (err) {
+    if (localVerified.skipLocalVerify && err?.message !== "fallback") {
+      return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
+    }
     await delay(400);
     const session = requireAuth();
     const healedSession = autoHealSessionEmployeeId(session);
@@ -21848,20 +21870,33 @@ async function checkIn(payload) {
 async function checkOut(payload) {
   const localVerified = await resolveLocalFaceVerification(payload);
   if (!localVerified.success) return localVerified;
+  const gasPayload = localVerified.skipLocalVerify ? {
+    lat: payload.lat || 0,
+    lng: payload.lng || 0,
+    photo: payload.photo || "",
+    faceDescriptor: localVerified.descriptor || [],
+    faceVerified: false
+  } : {
+    lat: payload.lat || 0,
+    lng: payload.lng || 0,
+    photo: payload.photo || "",
+    faceDescriptor: localVerified.descriptor || [],
+    faceVerified: true
+  };
   try {
-    const gasResult = await callAPI("checkout", {
-      lat: payload.lat || 0,
-      lng: payload.lng || 0,
-      photo: payload.photo || "",
-      faceDescriptor: localVerified.descriptor || [],
-      faceVerified: true
-    });
+    const gasResult = await callAPI("checkout", gasPayload);
     if (!gasResult.success && isGASFaceError(gasResult.message || "")) {
       console.warn("[checkOut] GAS face error, fallback to local:", gasResult.message);
+      if (localVerified.skipLocalVerify) {
+        return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
+      }
       throw new Error("fallback");
     }
     return gasResult;
-  } catch {
+  } catch (err) {
+    if (localVerified.skipLocalVerify && err?.message !== "fallback") {
+      return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
+    }
     await delay(400);
     const session = requireAuth();
     const healedSession = autoHealSessionEmployeeId(session);
@@ -54250,7 +54285,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-B9vJOb22.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-OylYzVNz.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
