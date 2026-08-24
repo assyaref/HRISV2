@@ -14958,6 +14958,11 @@ function useViewTransitionState(to2, { relative } = {}) {
   return matchPath(path.pathname, nextPath) != null || matchPath(path.pathname, currentPath) != null;
 }
 const GAS_API_URL = "https://script.google.com/macros/s/AKfycbwRwzGGNXT78sH9r0lWhOmRpAfOcVPxH8ALXHdGfM1QZWCUCuDEVXJVxJjnsc-KocfU0A/exec";
+console.log("[GAS API]", {
+  environment: "production",
+  apiConfigured: true,
+  deployment: String(GAS_API_URL).split("/s/")[1]?.split("/")[0]?.slice(0, 12) + "…"
+});
 async function gasRequest(action, payload = {}, token = "") {
   const response = await fetch(GAS_API_URL, {
     method: "POST",
@@ -21017,9 +21022,32 @@ function makeRequestId(prefix) {
   const uuid = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return `${prefix}-${uuid}`;
 }
+const SESSION_STORAGE_KEY = "gas_session";
+function readStoredSession() {
+  const s2 = getItem(SESSION_STORAGE_KEY, null);
+  if (!s2 || !s2.token) return null;
+  if (s2.expiresAt && Date.now() >= s2.expiresAt) return null;
+  return s2;
+}
 async function faceCall(action, payload, fallbackCode) {
+  const session = readStoredSession();
+  const token = session?.token || "";
+  console.log(
+    `[FACE REQUEST] action=${action} | userId=${session?.userId || "-"} | employeeId=${session?.employeeId || "-"} | email=${session?.email || "-"} | sessionTokenExists=${!!token}`
+  );
   try {
-    return await gasRequest(action, payload);
+    const res = await gasRequest(action, payload, token);
+    if (!res.success && !res.code && typeof res.message === "string" && res.message.toLowerCase().includes("sesi tidak valid")) {
+      console.warn(
+        '[FACE REQUEST] Backend membalas "Sesi tidak valid" tanpa code. Kemungkinan deployment GAS belum versi terbaru, atau memang sesi berakhir.'
+      );
+      return {
+        ...res,
+        code: "SESSION_NOT_FOUND",
+        message: "Sesi tidak valid atau telah berakhir. Silakan logout dan login kembali."
+      };
+    }
+    return res;
   } catch (err) {
     console.error("[FACE] request failed:", action, err);
     return {
@@ -21178,6 +21206,11 @@ function getSessionToken() {
 function getSession() {
   const session = getItem(SESSION_KEY, null);
   if (!session) return null;
+  if (!session.sessionVersion || session.sessionVersion < 2) {
+    removeItem(SESSION_KEY);
+    console.warn("[Session] Format sesi lama terdeteksi — login ulang diperlukan.");
+    return null;
+  }
   if (session.expiresAt < Date.now()) {
     removeItem(SESSION_KEY);
     return null;
@@ -21185,7 +21218,7 @@ function getSession() {
   return session;
 }
 function saveSession(session) {
-  setItem(SESSION_KEY, session);
+  setItem(SESSION_KEY, { ...session, sessionVersion: 2 });
 }
 function requireAuth() {
   const session = getSession();
@@ -54201,7 +54234,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-CbRabW4i.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-7gsGGsWC.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -59173,7 +59206,7 @@ function AppRoutes() {
 function App() {
   return /* @__PURE__ */ jsxRuntimeExports.jsx(HashRouter, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(ThemeProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(ToastProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(AuthProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(AppRoutes, {}) }) }) }) });
 }
-console.log("[APP VERSION]", "2026-08-24.mt6kz45l");
+console.log("[APP VERSION]", "2026-08-24.mt6lp8kr");
 clientExports.createRoot(document.getElementById("root")).render(
   /* @__PURE__ */ jsxRuntimeExports.jsx(reactExports.StrictMode, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(App, {}) })
 );

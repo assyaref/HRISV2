@@ -64,10 +64,20 @@ function handleRequest(e, method) {
     var session = null;
 
     if (publicActions.indexOf(action) === -1) {
-      session = verifyToken(token);
-      if (!session) {
-        return jsonResponse({ success: false, message: 'Sesi tidak valid. Silakan login kembali.' });
+      // SESSION CONTRACT: satu token dari login, divalidasi di sini.
+      // Error dibedakan agar tidak ada lagi "Sesi tidak valid" generik
+      // untuk penyebab yang berbeda.
+      var v = verifyTokenDetailed(token);
+      if (!v.ok) {
+        var sessCode = v.reason === 'expired' ? 'SESSION_EXPIRED' : 'SESSION_NOT_FOUND';
+        var sessMsg = v.reason === 'expired'
+          ? 'Sesi telah berakhir. Silakan login kembali.'
+          : 'Sesi tidak ditemukan. Silakan logout dan login kembali.';
+        Logger.log('[AUTH] ' + sessCode + ' action=' + action +
+          ' tokenProvided=' + !!token);
+        return jsonResponse({ success: false, code: sessCode, message: sessMsg });
       }
+      session = v.session;
     }
 
     // ========== PASTIKAN employeeId UNTUK ACTION YANG MEMBUTUHKAN ==========
@@ -244,6 +254,9 @@ function handleRequest(e, method) {
         break;
       case 'faceDeactivate':
         result = FaceTemplateService.deactivate(params, session);
+        break;
+      case 'diagnoseSession':
+        result = diagnoseSessionData(session);
         break;
 
       // Legacy action names - dipertahankan agar bundle lama yang masih

@@ -67,11 +67,20 @@ function getSessionToken(): string {
 }
 
 /**
- * Get full session object
+ * Get full session object.
+ * SESSION VERSIONING: sesi format lama (tanpa sessionVersion=2) otomatis
+ * dibuang agar user melakukan login ulang SEKALI dengan kontrak baru —
+ * bukan di-heal terus-menerus.
  */
 function getSession(): Session | null {
-  const session = getItem<Session | null>(SESSION_KEY, null);
+  const session = getItem<(Session & { sessionVersion?: number }) | null>(SESSION_KEY, null);
   if (!session) return null;
+  if (!session.sessionVersion || session.sessionVersion < 2) {
+    removeItem(SESSION_KEY);
+    console.warn('[Session] Format sesi lama terdeteksi — login ulang diperlukan.');
+    return null;
+  }
+  // Expiration dibandingkan sebagai epoch milliseconds (bukan string tanggal)
   if (session.expiresAt < Date.now()) {
     removeItem(SESSION_KEY);
     return null;
@@ -80,10 +89,10 @@ function getSession(): Session | null {
 }
 
 /**
- * Save session to storage
+ * Save session to storage (dengan penanda versi kontrak sesi).
  */
 function saveSession(session: Session): void {
-  setItem(SESSION_KEY, session);
+  setItem(SESSION_KEY, { ...session, sessionVersion: 2 });
 }
 
 /**

@@ -14,6 +14,7 @@
  */
 
 import { gasRequest } from './gasClient';
+import { getItem } from '../lib/storage';
 
 // ============================================================
 //  TYPES
@@ -37,6 +38,9 @@ export type FaceResultCode =
   | 'DUPLICATE_CHECKIN'
   | 'DUPLICATE_CHECKOUT'
   | 'NO_CHECKIN'
+  | 'SESSION_NOT_FOUND'
+  | 'SESSION_EXPIRED'
+  | 'SESSION_VERSION_MISMATCH'
   | 'VERIFICATION_ERROR';
 
 export interface FaceVerificationResult {
@@ -125,6 +129,31 @@ function makeRequestId(prefix: string): string {
 }
 
 // ============================================================
+//  SESSION (satu kontrak: token dari login GAS, disimpan frontend,
+//  dikirim ulang di SETIAP request face — tidak ada sesi kedua)
+// ============================================================
+
+interface StoredSession {
+  token?: string;
+  userId?: string;
+  employeeId?: string;
+  email?: string;
+  expiresAt?: number;
+  sessionVersion?: number;
+}
+
+const SESSION_STORAGE_KEY = 'gas_session'; // sama dengan api.ts SESSION_KEY
+
+function readStoredSession(): StoredSession | null {
+  const s = getItem<StoredSession | null>(SESSION_STORAGE_KEY, null);
+  if (!s || !s.token) return null;
+  // Expiration dicek dengan epoch milliseconds (bukan string tanggal) agar
+  // bebas masalah timezone antara browser dan GAS.
+  if (s.expiresAt && Date.now() >= s.expiresAt) return null;
+  return s;
+}
+
+// ============================================================
 //  LOW-LEVEL CALL DENGAN PEMETAAN ERROR -> CODE
 // ============================================================
 
@@ -140,8 +169,41 @@ async function faceCall(
   payload: Record<string, unknown>,
   fallbackCode: FaceResultCode
 ): Promise<GasResponse> {
+  const session = readStoredSession();
+  const token = session?.token || '';
+
+  // Diagnostic log (Phase audit) — JANGAN pernah mencetak token asli.
+  console.log(
+    `[FACE REQUEST] action=${action}` +
+      ` | userId=${session?.userId || '-'}` +
+      ` | employeeId=${session?.employeeId || '-'}` +
+      ` | email=${session?.email || '-'}` +
+      ` | sessionTokenExists=${!!token}`
+  );
+
   try {
-    return await gasRequest<GasResponse>(action, payload);
+    const res = await gasRequest<GasResponse>(action, payload, token);
+
+    // Backend lama (sebelum kode error terstandar) membalas pesan generik.
+    // Petakan ke code resmi tanpa mengubah artinya.
+    if (
+      !res.success &&
+      !res.code &&
+      typeof res.message === 'string' &&
+      res.message.toLowerCase().includes('sesi tidak valid')
+    ) {
+      console.warn(
+        '[FACE REQUEST] Backend membalas "Sesi tidak valid" tanpa code. ' +
+          'Kemungkinan deployment GAS belum versi terbaru, atau memang sesi berakhir.'
+      );
+      return {
+        ...res,
+        code: 'SESSION_NOT_FOUND',
+        message: 'Sesi tidak valid atau telah berakhir. Silakan logout dan login kembali.',
+      };
+    }
+
+    return res;
   } catch (err) {
     // Network / HTTP error - JANGAN dilaporkan sebagai "belum terdaftar"
     console.error('[FACE] request failed:', action, err);

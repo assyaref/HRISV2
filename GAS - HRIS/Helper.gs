@@ -184,6 +184,81 @@ function verifyToken(token) {
 }
 
 /**
+ * Verify session token WITH distinct reason (untuk error code resmi):
+ *  - 'not_found' : token tidak ada di sheet SESSIONS
+ *  - 'expired'   : token ada tapi expiresAt sudah lewat (epoch ms)
+ *  - 'no_token'  : request tidak membawa token sama sekali
+ * Expiration selalu dibandingkan sebagai angka epoch milliseconds,
+ * bukan string tanggal, agar tidak terpengaruh timezone.
+ */
+function verifyTokenDetailed(token) {
+  if (!token) return { ok: false, reason: 'not_found', session: null };
+
+  var sessions = sheetToObjects(CONFIG.SHEETS.SESSIONS);
+  for (var i = 0; i < sessions.length; i++) {
+    if (sessions[i].token === token) {
+      if (Number(sessions[i].expiresAt) < Date.now()) {
+        deleteObject(CONFIG.SHEETS.SESSIONS, sessions[i].token);
+        return { ok: false, reason: 'expired', session: null };
+      }
+      return { ok: true, reason: '', session: sessions[i] };
+    }
+  }
+  return { ok: false, reason: 'not_found', session: null };
+}
+
+/**
+ * Diagnosa sesi saat ini (action=diagnoseSession).
+ * Output tanpa token — hanya keberadaan & kecocokan identitas.
+ * Dipakai untuk memastikan: FRONTEND USER_ID == GAS USER_ID.
+ */
+function diagnoseSessionData(session) {
+  var userFound = false;
+  var employeeFound = false;
+  var employeeId = '';
+
+  try {
+    var users = sheetToObjects(CONFIG.SHEETS.USERS);
+    for (var i = 0; i < users.length; i++) {
+      if (String(users[i].id) === String(session.userId)) { userFound = true; break; }
+    }
+    var employees = sheetToObjects(CONFIG.SHEETS.EMPLOYEE);
+    // via USERS.employeeId -> EMPLOYEE.id/employeeId
+    for (var u = 0; u < users.length && !employeeFound; u++) {
+      if (String(users[u].id) !== String(session.userId)) continue;
+      var ue = String(users[u].employeeId || '');
+      for (var e = 0; e < employees.length; e++) {
+        if ((ue && (ue === String(employees[e].id) || ue === String(employees[e].employeeId))) ||
+            (String(employees[e].email).toLowerCase() === String(session.email).toLowerCase())) {
+          employeeFound = true;
+          employeeId = String(employees[e].employeeId || employees[e].id || '');
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    Logger.log('[diagnoseSession] lookup error: ' + err);
+  }
+
+  return {
+    success: true,
+    code: 'VERIFIED',
+    data: {
+      sessionFound: true,
+      sessionValid: true,
+      userId: String(session.userId || ''),
+      email: String(session.email || ''),
+      employeeId: employeeId,
+      expiresAt: Number(session.expiresAt) || 0,
+      userFound: userFound,
+      employeeFound: employeeFound,
+      userIdMatch: userFound,
+      employeeIdMatch: employeeFound
+    }
+  };
+}
+
+/**
  * Cleanup expired sessions from SESSIONS sheet.
  * Runs opportunistically on random requests (1-in-20 chance)
  * to avoid running on every single request.
