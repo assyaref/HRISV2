@@ -272,6 +272,7 @@ var FaceTemplateService = (function () {
 
     appendObject(CONFIG.SHEETS.FACE_TEMPLATES, row);
     SpreadsheetApp.flush();
+    logInfo_('enroll', requestId + ' [FACE ENROLL WRITE] success templateId=' + templateId);
 
     // 5. READ BACK - wajib berhasil sebelum boleh bilang sukses
     var all = readAllTemplates_();
@@ -279,6 +280,7 @@ var FaceTemplateService = (function () {
     for (var i = 0; i < all.length; i++) {
       if (all[i].FACE_TEMPLATE_ID === templateId) { written = all[i]; break; }
     }
+    logInfo_('enroll', requestId + ' [FACE ENROLL READBACK] found=' + (written !== null));
 
     if (!written) {
       return failCoded_('REGISTRATION_FAILED',

@@ -21037,6 +21037,16 @@ async function faceCall(action, payload, fallbackCode) {
   );
   try {
     const res = await gasRequest(action, payload, token);
+    if (!res.success && (res.code === "UNKNOWN_ACTION" || typeof res.message === "string" && res.message.includes("Action tidak dikenali"))) {
+      console.warn(
+        '[FACE REQUEST] Backend tidak mengenal action "' + action + '". Deployment GAS kemungkinan masih versi lama.'
+      );
+      return {
+        success: false,
+        code: "UNKNOWN_ACTION",
+        message: LEGACY_BACKEND_MESSAGE
+      };
+    }
     if (!res.success && !res.code && typeof res.message === "string" && res.message.toLowerCase().includes("sesi tidak valid")) {
       console.warn(
         '[FACE REQUEST] Backend membalas "Sesi tidak valid" tanpa code. Kemungkinan deployment GAS belum versi terbaru, atau memang sesi berakhir.'
@@ -54234,7 +54244,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-7gsGGsWC.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-DNfuO3jn.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -59206,7 +59216,7 @@ function AppRoutes() {
 function App() {
   return /* @__PURE__ */ jsxRuntimeExports.jsx(HashRouter, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(ThemeProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(ToastProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(AuthProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(AppRoutes, {}) }) }) }) });
 }
-console.log("[APP VERSION]", "2026-08-24.mt6lp8kr");
+console.log("[APP VERSION]", "2026-08-24.mt6m3kn1");
 clientExports.createRoot(document.getElementById("root")).render(
   /* @__PURE__ */ jsxRuntimeExports.jsx(reactExports.StrictMode, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(App, {}) })
 );

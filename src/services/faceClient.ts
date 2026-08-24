@@ -184,6 +184,24 @@ async function faceCall(
   try {
     const res = await gasRequest<GasResponse>(action, payload, token);
 
+    // Backend lama (belum berisi FACE ID v2) membalas UNKNOWN_ACTION.
+    // Terjemahkan ke instruksi deploy yang jelas — bukan teks mentah.
+    if (
+      !res.success &&
+      (res.code === 'UNKNOWN_ACTION' ||
+        (typeof res.message === 'string' && res.message.includes('Action tidak dikenali')))
+    ) {
+      console.warn(
+        '[FACE REQUEST] Backend tidak mengenal action "' + action + '". ' +
+          'Deployment GAS kemungkinan masih versi lama.'
+      );
+      return {
+        success: false,
+        code: 'UNKNOWN_ACTION',
+        message: LEGACY_BACKEND_MESSAGE,
+      };
+    }
+
     // Backend lama (sebelum kode error terstandar) membalas pesan generik.
     // Petakan ke code resmi tanpa mengubah artinya.
     if (

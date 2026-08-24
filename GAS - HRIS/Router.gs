@@ -93,6 +93,12 @@ function handleRequest(e, method) {
 
     var result;
 
+    // Diagnostic: buktikan action mana yang di-dispatch ke handler mana
+    // (tanpa token / data biometrik).
+    Logger.log('[ROUTER] action=' + action +
+      ' sessionUserId=' + (session ? session.userId : '-') +
+      ' method=' + method);
+
     switch (action) {
       // Auth
       case 'login':
