@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { LogIn, LogOut, MapPin, Camera, Download, Clock, Navigation } from 'lucide-react';
 import * as api from '../services/api';
 import type { Attendance } from '../types';
@@ -12,11 +12,11 @@ import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { formatDate, formatTime, exportToExcel, getCurrentPosition, todayStr } from '../lib/utils';
 import { db } from '../lib/db';
-import { validateFace, type FaceValidationResult } from '../services/faceRecognition';
+import { validateFace, verifyFaceFromBase64, decodeDescriptor, type FaceValidationResult, type FaceMatchResult } from '../services/faceRecognition';
 
 export function AttendancePage() {
   const toast = useToast();
-  const { session, isHR, isManager } = useAuth();
+  const { session, isHR, isManager, refresh } = useAuth();
   const [attendances, setAttendances] = useState<Attendance[]>([]);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
@@ -25,6 +25,8 @@ export function AttendancePage() {
   const [photo, setPhoto] = useState<string | null>(null);
   const [faceDescriptor, setFaceDescriptor] = useState<number[] | null>(null);
   const [faceValidation, setFaceValidation] = useState<FaceValidationResult | null>(null);
+  const [faceMatchResult, setFaceMatchResult] = useState<FaceMatchResult | null>(null);
+  const [faceRegistered, setFaceRegistered] = useState(false);
   const [faceVerified, setFaceVerified] = useState(false);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locLoading, setLocLoading] = useState(false);
@@ -33,18 +35,16 @@ export function AttendancePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Auto-heal session.employeeId before using it
-  const healedSession = session && session.employeeId ? (() => {
-    const employee = db.getEmployeeById(session.employeeId);
-    if (!employee && session.email) {
-      const empByEmail = db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase());
-      if (empByEmail && empByEmail.id !== session.employeeId) {
-        console.log(`[AttendancePage] Auto-heal: session.employeeId "${session.employeeId}" -> "${empByEmail.id}"`);
-        return { ...session, employeeId: empByEmail.id };
-      }
+  // Gunakan API's official auto-heal function untuk konsistensi
+  const healedSession = session ? api.autoHealSessionEmployeeId(session) : session;
+  
+  // Refresh auth context jika session berubah setelah healing
+  useEffect(() => {
+    if (healedSession && session && healedSession.employeeId !== session.employeeId) {
+      console.log('[AttendancePage] Session healed, refreshing auth context');
+      refresh();
     }
-    return session;
-  })() : session;
+  }, [healedSession, session, refresh]);
 
   const todayAtt = attendances.find(
     (a) => a.employeeId === healedSession?.employeeId && a.date === todayStr()
@@ -85,6 +85,8 @@ export function AttendancePage() {
     setPhoto(null);
     setFaceDescriptor(null);
     setFaceValidation(null);
+    setFaceMatchResult(null);
+    setFaceRegistered(false);
     setFaceVerified(false);
     setCameraOpen(true);
     await getLocation();
@@ -107,7 +109,7 @@ export function AttendancePage() {
     }
   };
 
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
@@ -119,18 +121,65 @@ export function AttendancePage() {
       const photoData = canvas.toDataURL('image/jpeg', 0.92);
       setPhoto(photoData);
       
-      // Validate face and extract descriptor
+      // Step 1: Validate face detection
       const validation = validateFace(canvas);
       setFaceValidation(validation);
       
-      if (validation.detected && validation.descriptor) {
-        setFaceDescriptor(validation.descriptor);
-        setFaceVerified(true);
-        toast.success('Wajah terdeteksi!');
-      } else {
+      if (!validation.detected || !validation.descriptor) {
         setFaceDescriptor(null);
         setFaceVerified(false);
+        setFaceMatchResult(null);
         toast.warning(validation.message || 'Wajah tidak terdeteksi dengan baik. Silakan coba lagi.');
+        return;
+      }
+      
+      setFaceDescriptor(validation.descriptor);
+      
+      // Step 2: Check if user has face registered in local database
+      const employee = healedSession?.employeeId ? db.getEmployeeById(healedSession.employeeId) : null;
+      const hasLocalDescriptor = employee?.faceDescriptor && String(employee.faceDescriptor).trim().length > 2 && employee.faceDescriptor !== '[]';
+      setFaceRegistered(!!hasLocalDescriptor);
+      
+      console.log('[FaceDebug] Check registration status:', {
+        employeeId: healedSession?.employeeId,
+        hasLocalDescriptor,
+        faceDescriptorLength: employee?.faceDescriptor?.length
+      });
+      
+      // Step 3: If face is registered locally, perform matching
+      if (hasLocalDescriptor) {
+        try {
+          const enrolledDescriptor = JSON.parse(employee!.faceDescriptor!);
+          
+          if (enrolledDescriptor && enrolledDescriptor.length > 0) {
+            // Verify face matching
+            const matchResult = await verifyFaceFromBase64(photoData, enrolledDescriptor);
+            setFaceMatchResult(matchResult);
+            
+            console.log('[FaceDebug] Face matching result:', {
+              matched: matchResult.matched,
+              similarity: matchResult.similarity,
+              message: matchResult.message
+            });
+            
+            if (matchResult.matched) {
+              setFaceVerified(true);
+              toast.success(`Wajah terverifikasi (${matchResult.similarity}%)`);
+            } else {
+              setFaceVerified(false);
+              toast.error(matchResult.message || 'Wajah tidak cocok. Silakan coba lagi.');
+            }
+          }
+        } catch (error) {
+          console.error('[FaceDebug] Error parsing face descriptor:', error);
+          setFaceVerified(false);
+          toast.error('Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.');
+        }
+      } else {
+        // Face not registered locally - still allow but inform user
+        setFaceVerified(false);
+        setFaceMatchResult(null);
+        toast.warning('Wajah terdeteksi tetapi belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.');
       }
     }
   };
@@ -142,6 +191,8 @@ export function AttendancePage() {
     setPhoto(null);
     setFaceDescriptor(null);
     setFaceValidation(null);
+    setFaceMatchResult(null);
+    setFaceRegistered(false);
     setFaceVerified(false);
   };
 
@@ -341,18 +392,44 @@ export function AttendancePage() {
             )}
           </div>
 
-          {/* Face Validation Status */}
+          {/* Face Detection Status */}
           {faceValidation && (
             <div className={`p-3 rounded-xl text-sm ${
               faceValidation.detected 
-                ? 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 text-emerald-700 dark:text-emerald-300'
+                ? 'bg-blue-50 dark:bg-blue-950/30 border border-blue-200 text-blue-700 dark:text-blue-300'
                 : 'bg-red-50 dark:bg-red-950/30 border border-red-200 text-red-700 dark:text-red-300'
             }`}>
               <div className="flex items-center gap-2">
                 {faceValidation.detected ? (
-                  <span>✅ Wajah terverifikasi ({faceValidation.confidence}%)</span>
+                  <span>👁️ Wajah terdeteksi ({faceValidation.confidence}%)</span>
                 ) : (
                   <span>❌ {faceValidation.message}</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Face Registration Status */}
+          {photo && faceValidation?.detected && !faceRegistered && (
+            <div className="p-3 rounded-xl text-sm bg-amber-50 dark:bg-amber-950/30 border border-amber-200 text-amber-700 dark:text-amber-300">
+              <div className="flex items-center gap-2">
+                <span>⚠️ Wajah belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.</span>
+              </div>
+            </div>
+          )}
+
+          {/* Face Matching Status */}
+          {faceMatchResult && (
+            <div className={`p-3 rounded-xl text-sm ${
+              faceMatchResult.matched 
+                ? 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 text-emerald-700 dark:text-emerald-300'
+                : 'bg-red-50 dark:bg-red-950/30 border border-red-200 text-red-700 dark:text-red-300'
+            }`}>
+              <div className="flex items-center gap-2">
+                {faceMatchResult.matched ? (
+                  <span>✅ Wajah terverifikasi ({faceMatchResult.similarity}%)</span>
+                ) : (
+                  <span>❌ {faceMatchResult.message}</span>
                 )}
               </div>
             </div>

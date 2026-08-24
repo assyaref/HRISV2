@@ -37,15 +37,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Auto-heal session.employeeId after login
   useEffect(() => {
-    if (session?.employeeId) {
-      // Trigger auto-heal by calling enrollFace with empty descriptor
-      // This will update session.employeeId if there's a mismatch
-      const employee = db.getEmployeeById(session.employeeId);
-      if (!employee && session.email) {
-        const empByEmail = db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase());
-        if (empByEmail) {
-          console.log(`[AuthContext] Session employeeId mismatch: "${session.employeeId}" vs "${empByEmail.id}"`);
-        }
+    if (session) {
+      const healed = api.autoHealSessionEmployeeId(session);
+      if (healed.employeeId !== session.employeeId) {
+        console.log('[AuthContext] Session healed, updating context');
+        setSession(healed);
       }
     }
   }, [session]);

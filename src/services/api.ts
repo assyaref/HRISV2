@@ -144,9 +144,47 @@ function findEmployeeForSession(session: Session): Employee | undefined {
  * Auto-heal session.employeeId to match EMPLOYEE sheet
  * This fixes the mismatch between USERS.employeeId and EMPLOYEE.employeeId
  */
-function autoHealSessionEmployeeId(session: Session): Session {
+/**
+ * Normalize employee ID to ensure consistent lookup across the system
+ * Converts all variations to uppercase trimmed string
+ */
+export function normalizeEmployeeId(value: unknown): string {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+/**
+ * Normalize face descriptor to ensure consistent format for matching
+ * Handles string (JSON), array, or Float32Array inputs
+ */
+export function normalizeDescriptor(value: unknown): Float32Array | null {
+  if (!value) return null;
+
+  if (value instanceof Float32Array) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return new Float32Array(value);
+  }
+
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return new Float32Array(parsed);
+      }
+    } catch (e) {
+      console.error('[Descriptor] Failed to parse face descriptor JSON:', e);
+      return null;
+    }
+  }
+
+  return null;
+}
+
+export function autoHealSessionEmployeeId(session: Session): Session {
   const employee = findEmployeeForSession(session);
-  if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
+  if (employee && (!session.employeeId || normalizeEmployeeId(session.employeeId) !== normalizeEmployeeId(employee.id))) {
     // Update session to use Employee.id (the correct ID for face lookup)
     const healedSession = { ...session, employeeId: employee.id };
     saveSession(healedSession);
@@ -678,8 +716,22 @@ function cosineSim(a: number[], b: number[]): number {
 async function resolveLocalFaceVerification(
   payload: { photo?: string; faceDescriptor?: number[]; faceVerified?: boolean }
 ): Promise<{ success: boolean; message: string; descriptor?: number[]; skipLocalVerify?: boolean }> {
-  const session = getSession();
+  // Get raw session and HEAL IT FIRST before using
+  let session = getSession();
   if (!session) return { success: false, message: 'Sesi tidak valid. Silakan login kembali.' };
+  
+  // SELALU heal session sebelum digunakan! Ini yang paling krusial
+  session = autoHealSessionEmployeeId(session);
+  const normalizedEmployeeId = normalizeEmployeeId(session.employeeId);
+
+  console.log('[FaceVerify] Starting verification with HEALED session:', {
+    originalEmployeeId: session.employeeId,
+    normalizedEmployeeId,
+    email: session.email,
+    hasPayloadDescriptor: !!payload.faceDescriptor,
+    payloadDescriptorLength: payload.faceDescriptor?.length,
+    hasPhoto: !!payload.photo
+  });
 
   // Wajib ada foto atau descriptor dari kamera
   if (!payload.photo && (!payload.faceDescriptor || payload.faceDescriptor.length === 0)) {
@@ -688,31 +740,58 @@ async function resolveLocalFaceVerification(
 
   const employee = findEmployeeForSession(session);
   const hasLocalDescriptor = isFaceEnrolled(employee);
+  
+  console.log('[FaceVerify] Employee lookup:', {
+    foundEmployee: !!employee,
+    employeeId: employee?.id,
+    normalizedLookupId: employee ? normalizeEmployeeId(employee.id) : null,
+    employeeEmail: employee?.email,
+    hasLocalDescriptor,
+    faceDescriptorExists: !!employee?.faceDescriptor,
+    faceDescriptorLength: employee?.faceDescriptor?.length
+  });
 
-  if (hasLocalDescriptor) {
-    // Verifikasi similarity lokal
-    let enrolledDescriptor: number[];
-    try {
-      enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
-    } catch {
+  if (hasLocalDescriptor && employee) {
+    // Verifikasi similarity lokal menggunakan normalizeDescriptor
+    const normalizedCameraDescriptor = normalizeDescriptor(payload.faceDescriptor);
+    const normalizedEnrolledDescriptor = normalizeDescriptor(employee.faceDescriptor);
+    
+    if (!normalizedEnrolledDescriptor) {
+      console.error('[FaceVerify] Failed to normalize enrolled descriptor');
       return { success: false, message: 'Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.' };
     }
-    if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-      return { success: false, message: 'Data wajah tidak valid. Silakan daftarkan ulang.' };
-    }
+    
+    console.log('[FaceVerify] Descriptors normalized:', {
+      cameraLength: normalizedCameraDescriptor?.length,
+      enrolledLength: normalizedEnrolledDescriptor.length
+    });
 
     // Verifikasi dengan descriptor dari live capture
-    if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-      const sim = cosineSim(payload.faceDescriptor, enrolledDescriptor);
+    if (normalizedCameraDescriptor && normalizedCameraDescriptor.length > 0) {
+      console.log('[FaceVerify] Comparing normalized descriptors:', {
+        cameraLength: normalizedCameraDescriptor.length,
+        enrolledLength: normalizedEnrolledDescriptor.length
+      });
+      
+      if (normalizedCameraDescriptor.length !== normalizedEnrolledDescriptor.length) {
+        console.error('[FaceVerify] Descriptor length mismatch!');
+        return { success: false, message: 'Data wajah tidak kompatibel. Silakan daftarkan ulang wajah Anda.' };
+      }
+      
+      const sim = cosineSim(Array.from(normalizedCameraDescriptor), Array.from(normalizedEnrolledDescriptor));
+      console.log('[FaceVerify] Similarity score:', sim);
+      
       if (sim < 0.55) {
         return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim*100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
       }
-      return { success: true, message: 'OK', descriptor: enrolledDescriptor };
+      return { success: true, message: 'OK', descriptor: Array.from(normalizedEnrolledDescriptor) };
     }
 
     // Verifikasi dari foto
     if (payload.photo) {
       const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
+      console.log('[FaceVerify] Photo verification result:', result);
+      
       if (!result.matched) {
         return { success: false, message: result.message || 'Verifikasi wajah gagal. Wajah tidak cocok.' };
       }
@@ -728,9 +807,10 @@ async function resolveLocalFaceVerification(
   }
 
   // Tidak ada descriptor sama sekali — tolak
+  console.log('[FaceVerify] No descriptor available, rejecting check-in');
   return {
     success: false,
-    message: 'Wajah Anda belum terdaftar di perangkat ini. Silakan daftarkan wajah terlebih dahulu di menu Face ID.',
+    message: 'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.',
   };
 }
 
