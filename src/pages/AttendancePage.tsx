@@ -34,6 +34,8 @@ export function AttendancePage() {
   const [dateTo, setDateTo] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const faceErrorShownRef = useRef(false);
+  const isProcessingRef = useRef(false);
 
   // Gunakan API's official auto-heal function untuk konsistensi
   const healedSession = session ? api.autoHealSessionEmployeeId(session) : session;
@@ -110,7 +112,10 @@ export function AttendancePage() {
   };
 
   const capturePhoto = async () => {
-    if (!videoRef.current) return;
+    if (!videoRef.current || isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    faceErrorShownRef.current = false;
+    
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth || 1280;
@@ -179,8 +184,12 @@ export function AttendancePage() {
         // Face not registered locally - still allow but inform user
         setFaceVerified(false);
         setFaceMatchResult(null);
-        toast.warning('Wajah terdeteksi tetapi belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.');
+        if (!faceErrorShownRef.current) {
+          faceErrorShownRef.current = true;
+          toast.warning('Wajah terdeteksi tetapi belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.');
+        }
       }
+      isProcessingRef.current = false;
     }
   };
 
@@ -194,6 +203,8 @@ export function AttendancePage() {
     setFaceMatchResult(null);
     setFaceRegistered(false);
     setFaceVerified(false);
+    isProcessingRef.current = false;
+    faceErrorShownRef.current = false;
   };
 
   const submitCheck = async () => {

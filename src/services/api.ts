@@ -716,12 +716,34 @@ function cosineSim(a: number[], b: number[]): number {
 async function resolveLocalFaceVerification(
   payload: { photo?: string; faceDescriptor?: number[]; faceVerified?: boolean }
 ): Promise<{ success: boolean; message: string; descriptor?: number[]; skipLocalVerify?: boolean }> {
+  console.log("[APP VERSION]", "8eca0ae");
+  console.log("[FACE VERIFY START]", {
+    timestamp: Date.now(),
+    source: "resolveLocalFaceVerification"
+  });
+  
   // Get raw session and HEAL IT FIRST before using
   let session = getSession();
   if (!session) return { success: false, message: 'Sesi tidak valid. Silakan login kembali.' };
   
+  console.log("[SESSION ACTUAL]", {
+    id: session?.id,
+    userId: session?.userId,
+    employeeId: session?.employeeId,
+    email: session?.email,
+    role: session?.role
+  });
+  
   // SELALU heal session sebelum digunakan! Ini yang paling krusial
-  session = autoHealSessionEmployeeId(session);
+  const healedSession = autoHealSessionEmployeeId(session);
+  
+  console.log("[SESSION HEALED]", {
+    before: session.employeeId,
+    after: healedSession.employeeId,
+    email: healedSession.email
+  });
+  
+  session = healedSession;
   const normalizedEmployeeId = normalizeEmployeeId(session.employeeId);
 
   console.log('[FaceVerify] Starting verification with HEALED session:', {
@@ -740,6 +762,26 @@ async function resolveLocalFaceVerification(
 
   const employee = findEmployeeForSession(session);
   const hasLocalDescriptor = isFaceEnrolled(employee);
+  
+  console.log('[FACE-ID LOOKUP]', {
+    employeeId: session.employeeId,
+    normalizedEmployeeId,
+    found: !!employee,
+    descriptorExists: !!employee?.faceDescriptor
+  });
+  
+  console.log('[FACE DATABASE]', {
+    employeeId: normalizedEmployeeId,
+    recordsCount: db.getFaceRecords?.()?.length,
+    matchedRecord: employee
+      ? {
+          id: employee.id,
+          employeeId: employee.employeeId,
+          email: employee.email,
+          hasDescriptor: !!employee.faceDescriptor
+        }
+      : null
+  });
   
   console.log('[FaceVerify] Employee lookup:', {
     foundEmployee: !!employee,
