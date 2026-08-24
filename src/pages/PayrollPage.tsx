@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+﻿import { useEffect, useState, useCallback } from 'react';
 import { Download, FileText, Play, Pencil, Upload, Lock } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -73,7 +73,7 @@ export function PayrollPage() {
     toast.success('Payroll diexport');
   };
 
-  const generateEncryptedPDF = (p: Payroll, password: string) => {
+  const generateEncryptedPDF = (p: Payroll, _password: string) => {
     const emp = db.getEmployeeById(p.employeeId);
     const settings = db.getSettings();
     const doc = new jsPDF();

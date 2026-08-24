@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import type { Session, Role } from '../types';
 import * as api from '../services/api';
-import { db } from '../lib/db';
 
 interface AuthContextType {
   session: Session | null;

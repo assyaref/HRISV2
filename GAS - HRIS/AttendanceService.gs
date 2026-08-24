@@ -20,56 +20,44 @@ var AttendanceService = (function() {
     var now = new Date();
     var timeStr = Utilities.formatDate(now, Session.getScriptTimeZone(), 'HH:mm:ss');
 
-    // Cek apakah sudah check-in hari ini
+    // Cek apakah sudah check-in hari ini (idempotent)
     var existing = findAttendance(employeeId, today);
     if (existing && existing.checkIn) {
-      return { success: false, message: 'Anda sudah check-in hari ini.' };
+      return { success: false, code: 'DUPLICATE_CHECKIN', message: 'Anda sudah check-in hari ini.' };
     }
 
     // ============================================================
-    // 🔥 VERIFIKASI WAJAH (hanya jika faceVerified !== true)
+    // 🔒 VERIFIKASI WAJAH SERVER-SIDE (WAJIB)
+    // Client TIDAK dipercaya. Tidak ada bypass faceVerified=true.
+    // Result codes membedakan: belum terdaftar vs template rusak
+    // vs wajah tidak cocok vs versi model beda.
     // ============================================================
-    var faceVerified = (params.faceVerified === true);
-    logInfo('checkIn', 'faceVerified = ' + faceVerified + ', employeeId=' + employeeId);
-
-    if (!faceVerified) {
-      // Jika tidak ada verifikasi dari frontend, lakukan pengecekan stored descriptor
-      var stored = getStoredDescriptor(employeeId, session.email);
-      if (!stored) {
-        logError('checkIn', 'Tidak ada stored descriptor untuk ' + employeeId + ' (email=' + session.email + ')');
-        return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
-      }
-
-      var faceDescriptor = params.faceDescriptor;
-      if (faceDescriptor && Array.isArray(faceDescriptor) && faceDescriptor.length > 0) {
-        var similarity = compareFaceDescriptors(faceDescriptor, stored);
-        if (similarity < CONFIG.FACE_SIMILARITY_THRESHOLD) {
-          logError('checkIn', 'Similarity rendah: ' + similarity + ' (threshold: ' + CONFIG.FACE_SIMILARITY_THRESHOLD + ')');
-          return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok.' };
-        }
-      } else {
-        // Tidak ada descriptor dari frontend, kita hanya percaya stored (kurang aman)
-        logWarn('checkIn', 'Tidak ada faceDescriptor, hanya mengandalkan stored descriptor.');
-      }
-    } else {
-      // faceVerified=true dari frontend — tetap verifikasi similarity dengan stored descriptor
-      logInfo('checkIn', 'faceVerified=true, verifikasi similarity dengan stored descriptor.');
-      var stored2 = getStoredDescriptor(employeeId, session.email);
-      if (!stored2) {
-        logError('checkIn', 'Tidak ada stored descriptor untuk ' + employeeId);
-        return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
-      }
-      if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-        var sim2 = compareFaceDescriptors(params.faceDescriptor, stored2);
-        if (sim2 < CONFIG.FACE_SIMILARITY_THRESHOLD) {
-          logError('checkIn', 'Similarity rendah (faceVerified path): ' + sim2);
-          return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok (' + Math.round(sim2 * 100) + '%).' };
-        }
-      }
+    var faceResult = FaceTemplateService.verifyLive({ faceDescriptor: params.faceDescriptor }, session);
+    if (!faceResult.success) {
+      logError('checkIn', '[' + faceResult.code + '] requestId=' + faceResult.requestId +
+        ' similarity=' + (faceResult.similarity != null ? faceResult.similarity.toFixed(4) : '-') +
+        ' threshold=' + CONFIG.FACE_SIMILARITY_THRESHOLD, session);
+      return {
+        success: false,
+        code: faceResult.code,
+        message: faceResult.message,
+        faceCode: faceResult.code,
+        similarity: faceResult.similarity,
+        requestId: faceResult.requestId
+      };
     }
 
     // ============================================================
-    // 💾 SIMPAN ABSENSI
+    // 📍 GEOFENCE SERVER-SIDE (koordinat kantor dari CONFIG)
+    // ============================================================
+    var geo = validateGeofence_(params.lat, params.lng);
+    if (!geo.ok) {
+      return { success: false, code: geo.code, message: geo.message };
+    }
+
+
+    // ============================================================
+    // 💾 SIMPAN ABSENSI (dengan metadata face)
     // ============================================================
     var attendance = {
       id: generateId('att'),
@@ -86,13 +74,17 @@ var AttendanceService = (function() {
       status: 'Present',
       workHours: null,
       lateMinutes: calculateLateMinutes(timeStr),
-      notes: faceVerified ? 'Verified by Face ID' : '',
-      createdAt: new Date().toISOString()
+      notes: 'Verified by Face ID (' + faceResult.similarityPercent + '%)',
+      createdAt: new Date().toISOString(),
+      faceTemplateId: faceResult.faceTemplateId,
+      faceSimilarity: faceResult.similarityPercent
     };
 
     saveAttendance(attendance);
-    logActivity(session.userId, session.name, 'CHECK_IN', 'Attendance', 
-                'Check-in ' + employeeId + ' at ' + timeStr + (faceVerified ? ' (faceVerified)' : ''));
+    logActivity(session.userId, session.name, 'CHECK_IN', 'Attendance',
+                'Check-in ' + employeeId + ' at ' + timeStr +
+                ' face=' + faceResult.similarityPercent + '%' +
+                ' template=' + faceResult.faceTemplateId);
 
     return { success: true, message: 'Check-in berhasil', data: attendance };
   }
@@ -113,48 +105,33 @@ var AttendanceService = (function() {
 
     var existing = findAttendance(employeeId, today);
     if (!existing || !existing.checkIn) {
-      return { success: false, message: 'Anda belum check-in hari ini.' };
+      return { success: false, code: 'NO_CHECKIN', message: 'Anda belum check-in hari ini.' };
     }
     if (existing.checkOut) {
-      return { success: false, message: 'Anda sudah check-out hari ini.' };
+      return { success: false, code: 'DUPLICATE_CHECKOUT', message: 'Anda sudah check-out hari ini.' };
     }
 
-    // Verifikasi wajah (sama seperti checkIn)
-    var faceVerified = (params.faceVerified === true);
-    logInfo('checkOut', 'faceVerified = ' + faceVerified + ', employeeId=' + employeeId);
-
-    if (!faceVerified) {
-      var stored = getStoredDescriptor(employeeId, session.email);
-      if (!stored) {
-        logError('checkOut', 'Tidak ada stored descriptor untuk ' + employeeId + ' (email=' + session.email + ')');
-        return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
-      }
-      var faceDescriptor = params.faceDescriptor;
-      if (faceDescriptor && Array.isArray(faceDescriptor) && faceDescriptor.length > 0) {
-        var similarity = compareFaceDescriptors(faceDescriptor, stored);
-        if (similarity < CONFIG.FACE_SIMILARITY_THRESHOLD) {
-          logError('checkOut', 'Similarity rendah: ' + similarity + ' (threshold: ' + CONFIG.FACE_SIMILARITY_THRESHOLD + ')');
-          return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok.' };
-        }
-      } else {
-        logWarn('checkOut', 'Tidak ada faceDescriptor, hanya mengandalkan stored descriptor.');
-      }
-    } else {
-      // faceVerified=true dari frontend — tetap verifikasi similarity dengan stored descriptor
-      logInfo('checkOut', 'faceVerified=true, verifikasi similarity dengan stored descriptor.');
-      var stored3 = getStoredDescriptor(employeeId, session.email);
-      if (!stored3) {
-        logError('checkOut', 'Tidak ada stored descriptor untuk ' + employeeId);
-        return { success: false, message: 'Wajah belum terdaftar. Silakan daftarkan wajah di menu Face ID.' };
-      }
-      if (params.faceDescriptor && Array.isArray(params.faceDescriptor) && params.faceDescriptor.length > 0) {
-        var sim3 = compareFaceDescriptors(params.faceDescriptor, stored3);
-        if (sim3 < CONFIG.FACE_SIMILARITY_THRESHOLD) {
-          logError('checkOut', 'Similarity rendah (faceVerified path): ' + sim3);
-          return { success: false, message: 'Verifikasi wajah gagal. Wajah tidak cocok (' + Math.round(sim3 * 100) + '%).' };
-        }
-      }
+    // ============================================================
+    // 🔒 VERIFIKASI WAJAH SERVER-SIDE (WAJIB - sama seperti checkIn)
+    // ============================================================
+    var faceResult = FaceTemplateService.verifyLive({ faceDescriptor: params.faceDescriptor }, session);
+    if (!faceResult.success) {
+      logError('checkOut', '[' + faceResult.code + '] requestId=' + faceResult.requestId, session);
+      return {
+        success: false,
+        code: faceResult.code,
+        message: faceResult.message,
+        faceCode: faceResult.code,
+        similarity: faceResult.similarity,
+        requestId: faceResult.requestId
+      };
     }
+
+    var geo = validateGeofence_(params.lat, params.lng);
+    if (!geo.ok) {
+      return { success: false, code: geo.code, message: geo.message };
+    }
+
 
     // Hitung jam kerja
     var diff = calculateWorkHours(existing.checkIn, timeStr);
@@ -169,11 +146,55 @@ var AttendanceService = (function() {
     existing.notes = (existing.notes || '') + (faceVerified ? ' Check-out verified' : '');
     updateAttendance(existing);
 
+    existing.checkOut = timeStr;
+    existing.checkOutLat = params.lat || null;
+    existing.checkOutLng = params.lng || null;
+    existing.checkOutPhoto = params.photo || null;
+    existing.workHours = workHours;
+    existing.status = workHours >= 8 ? 'Present' : 'Early Leave';
+    existing.notes = (existing.notes || '') + ' | Check-out verified (' + faceResult.similarityPercent + '%)';
+    updateAttendance(existing);
+
     logActivity(session.userId, session.name, 'CHECK_OUT', 'Attendance',
                 'Check-out ' + employeeId + ' at ' + timeStr + ' (hours: ' + workHours + ')' +
-                (faceVerified ? ' (faceVerified)' : ''));
+                ' face=' + faceResult.similarityPercent + '%' +
+                ' template=' + faceResult.faceTemplateId);
 
     return { success: true, message: 'Check-out berhasil', data: existing };
+  }
+
+  // ================================
+  //  GEOFENCE SERVER-SIDE
+  //  Koordinat kantor dari CONFIG (bukan dari client).
+  //  Tidak ada bypass: check-in/out wajib membawa GPS valid.
+  // ================================
+  function validateGeofence_(lat, lng) {
+    if (lat == null || lng == null || (Number(lat) === 0 && Number(lng) === 0)) {
+      return {
+        ok: false,
+        code: 'GPS_REQUIRED',
+        message: 'Koordinat GPS diperlukan untuk absensi. Aktifkan lokasi dan coba lagi.'
+      };
+    }
+    var latN = Number(lat), lngN = Number(lng);
+    if (!isFinite(latN) || !isFinite(lngN)) {
+      return { ok: false, code: 'GPS_REQUIRED', message: 'Koordinat GPS tidak valid.' };
+    }
+    var R = 6371000; // meter
+    var dLat = (CONFIG.OFFICE_LAT - latN) * Math.PI / 180;
+    var dLng = (CONFIG.OFFICE_LNG - lngN) * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(latN * Math.PI / 180) * Math.cos(CONFIG.OFFICE_LAT * Math.PI / 180) *
+      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    var dist = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    if (dist > CONFIG.OFFICE_RADIUS) {
+      return {
+        ok: false,
+        code: 'OUT_OF_GEOFENCE',
+        message: 'Anda berada ' + Math.round(dist) + 'm dari kantor. Absensi hanya dalam radius ' + CONFIG.OFFICE_RADIUS + 'm.'
+      };
+    }
+    return { ok: true, distance: Math.round(dist) };
   }
 
   // ================================
@@ -203,7 +224,9 @@ var AttendanceService = (function() {
           workHours: data[i][12],
           lateMinutes: data[i][13],
           notes: data[i][14],
-          createdAt: data[i][15]
+          createdAt: data[i][15],
+          faceTemplateId: data[i][16] || '',
+          faceSimilarity: data[i][17] || ''
         };
       }
     }
@@ -229,7 +252,9 @@ var AttendanceService = (function() {
       att.workHours,
       att.lateMinutes,
       att.notes,
-      att.createdAt
+      att.createdAt,
+      att.faceTemplateId || '',
+      att.faceSimilarity || ''
     ]);
   }
 

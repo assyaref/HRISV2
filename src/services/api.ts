@@ -1,4 +1,4 @@
-/**
+﻿/**
  * API Service - HRIS Lite Enterprise
  * 
  * Terintegrasi dengan Google Apps Script Backend (GAS).
@@ -9,7 +9,6 @@
 import { gasRequest, GAS_API_URL } from './gasClient';
 import { getItem, setItem, removeItem } from '../lib/storage';
 import { db } from '../lib/db';
-import { verifyFaceFromBase64 } from './faceRecognition';
 import {
   generateId,
   generateToken,
@@ -17,7 +16,6 @@ import {
   todayStr,
   calcLeaveDays,
   isBirthdayThisMonth,
-  haversineDistance,
   hashPassword,
 } from '../lib/utils';
 import type {
@@ -123,9 +121,9 @@ function delay(ms = API_DELAY) {
 
 /**
  * Multi-strategy employee lookup - mirrors FaceService.gs findEmployeeWithFace
- * 1. By id (session.employeeId → Employee.id)
- * 2. By employeeId field (session.employeeId → Employee.employeeId)
- * 3. By email (session.email → Employee.email)
+ * 1. By id (session.employeeId â†’ Employee.id)
+ * 2. By employeeId field (session.employeeId â†’ Employee.employeeId)
+ * 3. By email (session.email â†’ Employee.email)
  */
 function findEmployeeForSession(session: Session): Employee | undefined {
   if (session.employeeId) {
@@ -188,19 +186,10 @@ export function autoHealSessionEmployeeId(session: Session): Session {
     // Update session to use Employee.id (the correct ID for face lookup)
     const healedSession = { ...session, employeeId: employee.id };
     saveSession(healedSession);
-    console.log(`[Auto-Heal] Updated session.employeeId: "${session.employeeId}" → "${employee.id}" for ${employee.fullName}`);
+    console.log(`[Auto-Heal] Updated session.employeeId: "${session.employeeId}" â†’ "${employee.id}" for ${employee.fullName}`);
     return healedSession;
   }
   return session;
-}
-
-/**
- * Validasi apakah faceDescriptor benar-benar valid
- */
-function isFaceEnrolled(employee: { faceDescriptor?: string; faceRegistered?: boolean } | null | undefined): boolean {
-  if (!employee) return false;
-  const desc = String(employee.faceDescriptor || '').trim();
-  return desc.length > 2 && desc !== '[]';
 }
 
 /**
@@ -244,7 +233,7 @@ export async function login(email: string, password: string, remember = false): 
         saveSession(healedSession);
         return { ...result, data: healedSession };
       }
-      // GAS returned a business error (wrong password, inactive, etc) — return as-is
+      // GAS returned a business error (wrong password, inactive, etc) â€” return as-is
       // Only fall through to local if GAS itself failed (network/throw)
       if (result.message && !result.message.toLowerCase().includes('server error')) {
         return result;
@@ -259,7 +248,7 @@ export async function login(email: string, password: string, remember = false): 
   const user = db.getUserByEmail(email);
   if (!user) return fail('Email atau password salah');
 
-  // Support plaintext dan SHA-256 hash — sama seperti GAS Auth.gs
+  // Support plaintext dan SHA-256 hash â€” sama seperti GAS Auth.gs
   const inputHash = await hashPassword(password);
   const stored = String(user.password || '');
   const passwordMatch = stored === inputHash || stored === password;
@@ -274,7 +263,7 @@ export async function login(email: string, password: string, remember = false): 
   const employee = db.getEmployees().find(e => e.email.toLowerCase() === email.toLowerCase());
   if (employee && employee.id) {
     employeeId = employee.id;
-    console.log(`[Auto-Heal] Updated session.employeeId: "${user.employeeId}" → "${employeeId}" for ${email}`);
+    console.log(`[Auto-Heal] Updated session.employeeId: "${user.employeeId}" â†’ "${employeeId}" for ${email}`);
   }
   
   const session: Session = {
@@ -697,164 +686,6 @@ export async function deletePosition(id: string): Promise<ApiResponse> {
 
 // ========== ATTENDANCE ==========
 
-/**
- * Cosine similarity antara dua descriptor
- */
-function cosineSim(a: number[], b: number[]): number {
-  const len = Math.min(a.length, b.length);
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < len; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
-  return (na && nb) ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
-}
-
-/**
- * Verifikasi wajah sebelum check-in/out.
- * - Jika localStorage punya descriptor → verifikasi similarity lokal
- * - Jika localStorage kosong (device baru / belum enroll lokal) → cek GAS punya descriptor
- *   dengan mengirim faceVerified=true + descriptor ke GAS untuk diverifikasi di sana
- */
-async function resolveLocalFaceVerification(
-  payload: { photo?: string; faceDescriptor?: number[]; faceVerified?: boolean }
-): Promise<{ success: boolean; message: string; descriptor?: number[]; skipLocalVerify?: boolean }> {
-  console.log("[APP VERSION]", "8eca0ae");
-  console.log("[FACE VERIFY START]", {
-    timestamp: Date.now(),
-    source: "resolveLocalFaceVerification"
-  });
-  
-  // Get raw session and HEAL IT FIRST before using
-  let session = getSession();
-  if (!session) return { success: false, message: 'Sesi tidak valid. Silakan login kembali.' };
-  
-  console.log("[SESSION ACTUAL]", {
-    id: session?.id,
-    userId: session?.userId,
-    employeeId: session?.employeeId,
-    email: session?.email,
-    role: session?.role
-  });
-  
-  // SELALU heal session sebelum digunakan! Ini yang paling krusial
-  const healedSession = autoHealSessionEmployeeId(session);
-  
-  console.log("[SESSION HEALED]", {
-    before: session.employeeId,
-    after: healedSession.employeeId,
-    email: healedSession.email
-  });
-  
-  session = healedSession;
-  const normalizedEmployeeId = normalizeEmployeeId(session.employeeId);
-
-  console.log('[FaceVerify] Starting verification with HEALED session:', {
-    originalEmployeeId: session.employeeId,
-    normalizedEmployeeId,
-    email: session.email,
-    hasPayloadDescriptor: !!payload.faceDescriptor,
-    payloadDescriptorLength: payload.faceDescriptor?.length,
-    hasPhoto: !!payload.photo
-  });
-
-  // Wajib ada foto atau descriptor dari kamera
-  if (!payload.photo && (!payload.faceDescriptor || payload.faceDescriptor.length === 0)) {
-    return { success: false, message: 'Foto wajah diperlukan untuk absensi.' };
-  }
-
-  const employee = findEmployeeForSession(session);
-  const hasLocalDescriptor = isFaceEnrolled(employee);
-  
-  console.log('[FACE-ID LOOKUP]', {
-    employeeId: session.employeeId,
-    normalizedEmployeeId,
-    found: !!employee,
-    descriptorExists: !!employee?.faceDescriptor
-  });
-  
-  console.log('[FACE DATABASE]', {
-    employeeId: normalizedEmployeeId,
-    recordsCount: db.getFaceRecords?.()?.length,
-    matchedRecord: employee
-      ? {
-          id: employee.id,
-          employeeId: employee.employeeId,
-          email: employee.email,
-          hasDescriptor: !!employee.faceDescriptor
-        }
-      : null
-  });
-  
-  console.log('[FaceVerify] Employee lookup:', {
-    foundEmployee: !!employee,
-    employeeId: employee?.id,
-    normalizedLookupId: employee ? normalizeEmployeeId(employee.id) : null,
-    employeeEmail: employee?.email,
-    hasLocalDescriptor,
-    faceDescriptorExists: !!employee?.faceDescriptor,
-    faceDescriptorLength: employee?.faceDescriptor?.length
-  });
-
-  if (hasLocalDescriptor && employee) {
-    // Verifikasi similarity lokal menggunakan normalizeDescriptor
-    const normalizedCameraDescriptor = normalizeDescriptor(payload.faceDescriptor);
-    const normalizedEnrolledDescriptor = normalizeDescriptor(employee.faceDescriptor);
-    
-    if (!normalizedEnrolledDescriptor) {
-      console.error('[FaceVerify] Failed to normalize enrolled descriptor');
-      return { success: false, message: 'Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.' };
-    }
-    
-    console.log('[FaceVerify] Descriptors normalized:', {
-      cameraLength: normalizedCameraDescriptor?.length,
-      enrolledLength: normalizedEnrolledDescriptor.length
-    });
-
-    // Verifikasi dengan descriptor dari live capture
-    if (normalizedCameraDescriptor && normalizedCameraDescriptor.length > 0) {
-      console.log('[FaceVerify] Comparing normalized descriptors:', {
-        cameraLength: normalizedCameraDescriptor.length,
-        enrolledLength: normalizedEnrolledDescriptor.length
-      });
-      
-      if (normalizedCameraDescriptor.length !== normalizedEnrolledDescriptor.length) {
-        console.error('[FaceVerify] Descriptor length mismatch!');
-        return { success: false, message: 'Data wajah tidak kompatibel. Silakan daftarkan ulang wajah Anda.' };
-      }
-      
-      const sim = cosineSim(Array.from(normalizedCameraDescriptor), Array.from(normalizedEnrolledDescriptor));
-      console.log('[FaceVerify] Similarity score:', sim);
-      
-      if (sim < 0.55) {
-        return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim*100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
-      }
-      return { success: true, message: 'OK', descriptor: Array.from(normalizedEnrolledDescriptor) };
-    }
-
-    // Verifikasi dari foto
-    if (payload.photo) {
-      const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
-      console.log('[FaceVerify] Photo verification result:', result);
-      
-      if (!result.matched) {
-        return { success: false, message: result.message || 'Verifikasi wajah gagal. Wajah tidak cocok.' };
-      }
-      return { success: true, message: 'OK', descriptor: enrolledDescriptor };
-    }
-  }
-
-  // localStorage kosong — descriptor hanya ada di GAS Spreadsheet
-  // Kirim descriptor live ke GAS, biarkan GAS yang verifikasi similarity
-  if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-    console.log('[FaceVerify] No local descriptor, delegating verification to GAS');
-    return { success: true, message: 'OK', descriptor: payload.faceDescriptor, skipLocalVerify: true };
-  }
-
-  // Tidak ada descriptor sama sekali — tolak
-  console.log('[FaceVerify] No descriptor available, rejecting check-in');
-  return {
-    success: false,
-    message: 'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.',
-  };
-}
 
 export async function getAttendances(filters?: {
   employeeId?: string;
@@ -879,234 +710,84 @@ export async function getAttendances(filters?: {
   }
 }
 
-function isGASFaceError(msg: string): boolean {
-  const m = msg.toLowerCase();
-  return m.includes('belum terdaftar') || m.includes('wajah') || m.includes('face') || m.includes('descriptor');
-}
-
+/**
+ * CHECK-IN (FACE ID v2)
+ * ---------------------
+ * - SATU request ke GAS (`checkin`).
+ * - Verifikasi wajah dilakukan SERVER-SIDE terhadap FACE_TEMPLATES
+ *   memakai session.userId. Client tidak bisa mem-bypass.
+ * - Geofence divalidasi server-side dengan koordinat kantor dari CONFIG.
+ * - TIDAK ADA lagi fallback penulisan attendance ke localStorage.
+ * - Error dipetakan ke code terstandar (lihat faceClient.ts).
+ */
 export async function checkIn(payload: {
   lat?: number;
   lng?: number;
   photo?: string;
   faceDescriptor?: number[];
-  faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
-  const localVerified = await resolveLocalFaceVerification(payload);
-  if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
-
-  // Jika skipLocalVerify=true, descriptor hanya ada di GAS — kirim ke GAS tanpa faceVerified=true
-  // agar GAS tetap verifikasi similarity dengan stored descriptor di Spreadsheet
-  const gasPayload = localVerified.skipLocalVerify
-    ? {
-        lat: payload.lat || 0,
-        lng: payload.lng || 0,
-        photo: payload.photo || '',
-        faceDescriptor: localVerified.descriptor || [],
-        faceVerified: false, // paksa GAS verifikasi similarity
-      }
-    : {
-        lat: payload.lat || 0,
-        lng: payload.lng || 0,
-        photo: payload.photo || '',
-        faceDescriptor: localVerified.descriptor || [],
-        faceVerified: true,
-      };
+  if (!payload.faceDescriptor || payload.faceDescriptor.length === 0) {
+    return {
+      success: false,
+      code: 'INVALID_DESCRIPTOR',
+      message: 'Foto wajah diperlukan untuk check-in. Ambil foto terlebih dahulu.',
+    } as ApiResponse<Attendance>;
+  }
 
   try {
-    const gasResult = await callAPI<Attendance>('checkin', gasPayload);
-    if (!gasResult.success && isGASFaceError(gasResult.message || '')) {
-      console.warn('[checkIn] GAS face error, fallback to local:', gasResult.message);
-      if (localVerified.skipLocalVerify) {
-        // Descriptor tidak ada di GAS maupun localStorage — benar-benar belum enroll
-        return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
-      }
-      throw new Error('fallback');
-    }
-    return gasResult;
-  } catch (err: unknown) {
-    if (localVerified.skipLocalVerify && (err as Error)?.message !== 'fallback') {
-      return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
-    }
-    await delay(400);
-    const session = requireAuth();
-
-    // Auto-heal session.employeeId before processing
-    const healedSession = autoHealSessionEmployeeId(session);
-    
-    const today = todayStr();
-    const list = db.getAttendances();
-    const existing = list.find((a) => a.employeeId === (healedSession.employeeId || '') && a.date === today);
-    if (existing?.checkIn) return fail('Anda sudah check-in hari ini') as ApiResponse<Attendance>;
-
-    // Multi-strategy employee lookup
-    const employee = findEmployeeForSession(healedSession);
-    const employeeIdForAtt = employee?.id || healedSession.employeeId || '';
-
-    if (!employeeIdForAtt) {
-      return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
-    }
-
-    // 1. CEK WAJAH TERDAFTAR
-    if (!isFaceEnrolled(employee)) {
-      return fail(
-        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.'
-      ) as ApiResponse<Attendance>;
-    }
-
-    // 2. VERIFIKASI WAJAH
-    if (payload.photo && !payload.faceVerified) {
-      const faceRes = await verifyAttendanceFace(payload.photo);
-      if (!faceRes.success || !faceRes.data?.match) {
-        return fail(
-          faceRes.message || 'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar.'
-        ) as ApiResponse<Attendance>;
-      }
-    }
-
-    // 3. GEOFENCING VALIDATION
-    if (payload.lat != null && payload.lng != null) {
-      const settings = db.getSettings();
-      const dist = haversineDistance(payload.lat, payload.lng, settings.officeLat, settings.officeLng);
-      if (dist > settings.officeRadiusMeters) {
-        return fail(
-          `Anda berada ${Math.round(dist)}m dari kantor. Check-in hanya dalam radius ${settings.officeRadiusMeters}m.`
-        ) as ApiResponse<Attendance>;
-      }
-    }
-
-    const now = new Date();
-    const checkInTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-    const settings = db.getSettings();
-    const [startH, startM] = settings.workStartTime.split(':').map(Number);
-    const lateMinutes = Math.max(0, (now.getHours() * 60 + now.getMinutes()) - (startH * 60 + startM) - settings.lateToleranceMinutes);
-
-    const att: Attendance = {
-      id: generateId('att'),
-      employeeId: employeeIdForAtt,
-      date: today,
-      checkIn: checkInTime,
-      checkInLat: payload.lat,
-      checkInLng: payload.lng,
-      checkInPhoto: payload.photo,
-      status: lateMinutes > 0 ? 'Late' : 'Present',
-      lateMinutes,
-      createdAt: new Date().toISOString(),
-    };
-    list.push(att);
-    db.setAttendances(list);
-    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: 'CHECK_IN', module: 'Attendance', details: `Check-in at ${checkInTime}` });
-    return ok(att, 'Check-in berhasil');
+    return await callAPI<Attendance>('checkin', {
+      lat: payload.lat || 0,
+      lng: payload.lng || 0,
+      photo: payload.photo || '',
+      faceDescriptor: payload.faceDescriptor,
+      // Tidak ada lagi faceVerified=true â€” server selalu verifikasi sendiri.
+      faceVerified: false,
+    });
+  } catch (err) {
+    console.error('[checkIn] GAS error:', err);
+    return {
+      success: false,
+      code: 'NETWORK_ERROR',
+      message:
+        'Tidak dapat menghubungi server untuk check-in. Periksa koneksi internet Anda lalu coba lagi. Data absensi TIDAK disimpan ganda.',
+    } as ApiResponse<Attendance>;
   }
 }
 
+/**
+ * CHECK-OUT (FACE ID v2) - arsitektur sama dengan checkIn:
+ * satu request GAS, verifikasi wajah server-side, tanpa fallback lokal.
+ */
 export async function checkOut(payload: {
   lat?: number;
   lng?: number;
   photo?: string;
   faceDescriptor?: number[];
-  faceVerified?: boolean;
 }): Promise<ApiResponse<Attendance>> {
-  const localVerified = await resolveLocalFaceVerification(payload);
-  if (!localVerified.success) return localVerified as ApiResponse<Attendance>;
-
-  const gasPayload = localVerified.skipLocalVerify
-    ? {
-        lat: payload.lat || 0,
-        lng: payload.lng || 0,
-        photo: payload.photo || '',
-        faceDescriptor: localVerified.descriptor || [],
-        faceVerified: false,
-      }
-    : {
-        lat: payload.lat || 0,
-        lng: payload.lng || 0,
-        photo: payload.photo || '',
-        faceDescriptor: localVerified.descriptor || [],
-        faceVerified: true,
-      };
+  if (!payload.faceDescriptor || payload.faceDescriptor.length === 0) {
+    return {
+      success: false,
+      code: 'INVALID_DESCRIPTOR',
+      message: 'Foto wajah diperlukan untuk check-out. Ambil foto terlebih dahulu.',
+    } as ApiResponse<Attendance>;
+  }
 
   try {
-    const gasResult = await callAPI<Attendance>('checkout', gasPayload);
-    if (!gasResult.success && isGASFaceError(gasResult.message || '')) {
-      console.warn('[checkOut] GAS face error, fallback to local:', gasResult.message);
-      if (localVerified.skipLocalVerify) {
-        return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
-      }
-      throw new Error('fallback');
-    }
-    return gasResult;
-  } catch (err: unknown) {
-    if (localVerified.skipLocalVerify && (err as Error)?.message !== 'fallback') {
-      return fail('Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.') as ApiResponse<Attendance>;
-    }
-    await delay(400);
-    const session = requireAuth();
-
-    // Auto-heal session.employeeId before processing
-    const healedSession = autoHealSessionEmployeeId(session);
-
-    const today = todayStr();
-    const list = db.getAttendances();
-
-    // Multi-strategy employee lookup
-    const employee = findEmployeeForSession(healedSession);
-    const employeeIdForAtt = employee?.id || healedSession.employeeId || '';
-
-    if (!employeeIdForAtt) {
-      return fail('Akun tidak terhubung ke data karyawan') as ApiResponse<Attendance>;
-    }
-
-    const idx = list.findIndex((a) => a.employeeId === employeeIdForAtt && a.date === today);
-    if (idx < 0 || !list[idx].checkIn) return fail('Anda belum check-in hari ini') as ApiResponse<Attendance>;
-    if (list[idx].checkOut) return fail('Anda sudah check-out hari ini') as ApiResponse<Attendance>;
-
-    // 1. CEK APAKAH WAJAH SUDAH TERDAFTAR
-    if (!isFaceEnrolled(employee)) {
-      return fail(
-        'Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.'
-      ) as ApiResponse<Attendance>;
-    }
-
-    // 2. VERIFIKASI WAJAH DENGAN DATABASE
-    //    Jika faceVerified=true dari frontend, skip similarity check.
-    const faceVerifiedByClient2 = payload.faceVerified === true;
-    
-    if (payload.photo && !faceVerifiedByClient2) {
-      const faceRes = await verifyAttendanceFace(payload.photo);
-      if (!faceRes.success || !faceRes.data?.match) {
-        return fail(
-          faceRes.message || 'Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar.'
-        ) as ApiResponse<Attendance>;
-      }
-    }
-
-    // 3. GEOFENCING VALIDATION untuk Check Out
-    if (payload.lat != null && payload.lng != null) {
-      const settings = db.getSettings();
-      const dist = haversineDistance(payload.lat, payload.lng, settings.officeLat, settings.officeLng);
-      if (dist > settings.officeRadiusMeters) {
-        return fail(
-          `Anda berada ${Math.round(dist)}m dari kantor. Check-out hanya dalam radius ${settings.officeRadiusMeters}m.`
-        ) as ApiResponse<Attendance>;
-      }
-    }
-
-    const now = new Date();
-    const checkOutTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-    const [inH, inM] = list[idx].checkIn!.split(':').map(Number);
-    const workHours = +((now.getHours() + now.getMinutes() / 60) - (inH + inM / 60)).toFixed(2);
-
-    list[idx] = {
-      ...list[idx],
-      checkOut: checkOutTime,
-      checkOutLat: payload.lat,
-      checkOutLng: payload.lng,
-      checkOutPhoto: payload.photo,
-      workHours,
-    };
-    db.setAttendances(list);
-    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: 'CHECK_OUT', module: 'Attendance', details: `Work hours: ${workHours}h` });
-    return ok(list[idx], 'Check-out berhasil');
+    return await callAPI<Attendance>('checkout', {
+      lat: payload.lat || 0,
+      lng: payload.lng || 0,
+      photo: payload.photo || '',
+      faceDescriptor: payload.faceDescriptor,
+      faceVerified: false,
+    });
+  } catch (err) {
+    console.error('[checkOut] GAS error:', err);
+    return {
+      success: false,
+      code: 'NETWORK_ERROR',
+      message:
+        'Tidak dapat menghubungi server untuk check-out. Periksa koneksi internet Anda lalu coba lagi.',
+    } as ApiResponse<Attendance>;
   }
 }
 
@@ -1619,115 +1300,18 @@ export async function checkGASHealth(): Promise<ApiResponse> {
   }
 }
 
-// ========== FACE ENROLLMENT & VERIFICATION ==========
+// ========== FACE ENROLLMENT & VERIFICATION (FACE ID v2) ==========
+// Semua logika face sudah pindah ke services/faceClient.ts.
+// Fungsi di bawah hanya wrapper kompatibilitas untuk halaman yang masih
+// memanggil api.enrollFace / api.getFaceEnrollmentStatus.
 
-/**
- * Helper: Validasi apakah faceDescriptor benar-benar valid (bukan cuma faceRegistered=true)
- * Mencegah inconsistent state: faceRegistered=true tapi descriptor kosong/rusak
- */
-export async function enrollFace(faceDescriptor: number[]): Promise<ApiResponse> {
-  if (!faceDescriptor || faceDescriptor.length === 0) {
-    return fail('Data wajah tidak valid. Silakan ambil foto ulang.') as ApiResponse;
-  }
-
-  const session = requireAuth();
-
-  // Auto-heal session.employeeId before enrollment
-  const healedSession = autoHealSessionEmployeeId(session);
-
-  // Multi-strategy employee lookup (mirrors FaceService.gs)
-  const employee = findEmployeeForSession(healedSession);
-  if (employee) {
-    const employees = db.getEmployees();
-    const idx = employees.findIndex((e) => e.id === employee.id);
-    if (idx >= 0) {
-      const descriptorJSON = JSON.stringify(faceDescriptor);
-      employees[idx].faceDescriptor = descriptorJSON;
-      employees[idx].faceRegistered = true;
-      db.setEmployees(employees);
-      db.addLog({
-        userId: healedSession.userId, userName: healedSession.name,
-        action: 'ENROLL_FACE', module: 'Face Recognition',
-        details: `Face enrolled locally for ${employees[idx].fullName}`
-      });
-    }
-  }
-
-  try {
-    return await callAPI('enrollFace', { faceDescriptor });
-  } catch {
-    await delay();
-    return ok({ descriptorLength: faceDescriptor.length }, 'Wajah berhasil didaftarkan');
-  }
-}
-
-export async function verifyAttendanceFace(photo: string): Promise<ApiResponse<{ match: boolean; similarity: number }>> {
-  await delay();
-  const session = requireAuth();
-
-  const employee = findEmployeeForSession(session);
-  if (!employee) {
-    return fail('Akun tidak terhubung ke data karyawan') as unknown as ApiResponse<{ match: boolean; similarity: number }>;
-  }
-  
-  // Validasi descriptor - konsisten dengan GAS UserService.gs
-  if (!isFaceEnrolled(employee)) {
-    return fail('Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu di menu Face ID.') as ApiResponse<{ match: boolean; similarity: number }>;
-  }
-
-  // Decode enrolled descriptor dengan try-catch
-  let enrolledDescriptor: number[];
-  try {
-    enrolledDescriptor = JSON.parse(employee!.faceDescriptor!) as number[];
-  } catch {
-    return fail('Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.') as ApiResponse<{ match: boolean; similarity: number }>;
-  }
-
-  if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-    return fail('Data wajah tidak valid. Silakan daftarkan ulang.') as ApiResponse<{ match: boolean; similarity: number }>;
-  }
-  
-  // Verify face from photo
-  const result = await verifyFaceFromBase64(photo, enrolledDescriptor);
-  
-  const faceResult: { match: boolean; similarity: number } = {
-    match: result.matched,
-    similarity: result.similarity,
-  };
-  return ok(faceResult, result.message);
-}
-
-export async function getFaceEnrollmentStatus(): Promise<ApiResponse<{ enrolled: boolean; employeeName?: string }>> {
-  // Multi-strategy employee lookup (mirrors FaceService.gs)
-  await delay(100);
-  const session = requireAuth();
-
-  // Auto-heal session.employeeId before status check
-  const healedSession = autoHealSessionEmployeeId(session);
-
-  const employee = findEmployeeForSession(healedSession);
-  if (!employee) return fail('Karyawan tidak ditemukan') as ApiResponse<{ enrolled: boolean; employeeName?: string }>;
-
-  // Validasi descriptor - konsisten dengan GAS UserService.gs
-  const enrolled = isFaceEnrolled(employee);
-
-  // Auto-healing: jika faceRegistered=true tapi descriptor kosong, reset flag
-  if (!enrolled && employee.faceRegistered) {
-    console.warn(`Auto-healing: ${employee.fullName} had faceRegistered=true but empty descriptor - resetting`);
-    const employees = db.getEmployees();
-    const idx = employees.findIndex((e) => e.id === employee.id);
-    if (idx >= 0) {
-      employees[idx].faceRegistered = false;
-      employees[idx].faceDescriptor = '';
-      db.setEmployees(employees);
-    }
-  }
-
-  return ok({
-    enrolled,
-    employeeName: employee.fullName,
-  });
-}
+export {
+  enrollFace,
+  getFaceStatus as getFaceEnrollmentStatus,
+  verifyLiveFace,
+  diagnoseFace,
+  deactivateFace,
+} from './faceClient';
 
 // ========== UPLOAD ==========
 export async function uploadPhoto(base64: string, filename: string, mimeType: string): Promise<ApiResponse<{ url: string }>> {

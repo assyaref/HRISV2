@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+﻿import { useState, useEffect } from 'react';
 import { Wifi, WifiOff, RefreshCw, Server } from 'lucide-react';
 import { checkGASHealth, setBackendMode } from '../../services/api';
-import { getItem, setItem } from '../../lib/storage';
+import { getItem } from '../../lib/storage';
 import { cn } from '../../lib/utils';
 
 const FALLBACK_KEY = 'use_gas_backend';

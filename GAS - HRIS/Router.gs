@@ -228,12 +228,35 @@ function handleRequest(e, method) {
         result = UserService.resetPassword(params, session);
         break;
 
-      // Face Recognition
+      // Face Recognition v2 (FACE_TEMPLATES - sumber kebenaran tunggal)
+      // Action baru
+      case 'faceEnroll':
+        result = FaceTemplateService.enroll(params, session);
+        break;
+      case 'faceStatus':
+        result = FaceTemplateService.getStatus(params, session);
+        break;
+      case 'faceVerifyLive':
+        result = FaceTemplateService.verifyLive(params, session);
+        break;
+      case 'faceDiagnose':
+        result = FaceTemplateService.diagnose(params, session);
+        break;
+      case 'faceDeactivate':
+        result = FaceTemplateService.deactivate(params, session);
+        break;
+
+      // Legacy action names - dipertahankan agar bundle lama yang masih
+      // ter-cache di PWA user tetap berfungsi (diarahkan ke service v2)
       case 'enrollFace':
-        result = UserService.enrollFace(params, session);
+        result = FaceTemplateService.enroll({ faceDescriptor: params.faceDescriptor }, session);
         break;
       case 'getFaceEnrollmentStatus':
-        result = UserService.getFaceStatus(params, session);
+        result = FaceTemplateService.getStatus(params, session);
+        break;
+      case 'verifyAttendanceFace':
+        result = FaceTemplateService.verifyLive(
+          { faceDescriptor: params.faceDescriptor || params.descriptor }, session);
         break;
 
       // Upload
@@ -267,8 +290,13 @@ function handleRequest(e, method) {
         result = checkFaceColumns();
         break;
 
+      // FACE ID v2 migration (EMPLOYEE.faceDescriptor -> FACE_TEMPLATES)
+      case 'migrateFaceTemplates':
+        result = FaceTemplateService.migrateFromLegacy();
+        break;
+
       default:
-        result = { success: false, message: 'Action tidak dikenali: ' + action };
+        result = { success: false, code: 'UNKNOWN_ACTION', message: 'Action tidak dikenali: ' + action };
     }
 
     return jsonResponse(result);
@@ -298,7 +326,7 @@ function getClientIp(e) {
 function initAllSheets() {
   var headers = {
     EMPLOYEE: ['id', 'employeeId', 'nik', 'fullName', 'gender', 'birthDate', 'religion', 'address', 'phone', 'email', 'departmentId', 'divisionId', 'positionId', 'joinDate', 'employmentStatus', 'salary', 'photo', 'managerId', 'faceDescriptor', 'faceRegistered', 'createdAt', 'updatedAt'],
-    ATTENDANCE: ['id', 'employeeId', 'date', 'checkIn', 'checkOut', 'checkInLat', 'checkInLng', 'checkOutLat', 'checkOutLng', 'checkInPhoto', 'checkOutPhoto', 'status', 'workHours', 'lateMinutes', 'notes', 'createdAt'],
+    ATTENDANCE: ['id', 'employeeId', 'date', 'checkIn', 'checkOut', 'checkInLat', 'checkInLng', 'checkOutLat', 'checkOutLng', 'checkInPhoto', 'checkOutPhoto', 'status', 'workHours', 'lateMinutes', 'notes', 'createdAt', 'faceTemplateId', 'faceSimilarity'],
     LEAVE: ['id', 'employeeId', 'leaveType', 'startDate', 'endDate', 'days', 'reason', 'status', 'managerNote', 'hrNote', 'approvedByManager', 'approvedByHR', 'createdAt', 'updatedAt'],
     PERMISSION: ['id', 'employeeId', 'type', 'date', 'startTime', 'endTime', 'reason', 'status', 'approvedBy', 'note', 'createdAt'],
     PAYROLL: ['id', 'employeeId', 'period', 'basicSalary', 'allowance', 'overtime', 'deduction', 'bpjs', 'pph21', 'netSalary', 'status', 'generatedAt', 'paidAt', 'notes'],
@@ -309,7 +337,8 @@ function initAllSheets() {
     SETTING: ['key', 'value'],
     ANNOUNCEMENT: ['id', 'title', 'content', 'priority', 'targetRole', 'isActive', 'publishDate', 'expiryDate', 'createdBy', 'createdAt'],
     LOGS: ['id', 'userId', 'userName', 'action', 'module', 'details', 'ip', 'createdAt'],
-    SESSIONS: ['token', 'userId', 'email', 'role', 'name', 'employeeId', 'avatar', 'expiresAt']
+    SESSIONS: ['token', 'userId', 'email', 'role', 'name', 'employeeId', 'avatar', 'expiresAt'],
+    FACE_TEMPLATES: ['FACE_TEMPLATE_ID', 'USER_ID', 'EMPLOYEE_ID', 'EMAIL', 'MODEL', 'MODEL_VERSION', 'DESCRIPTOR_VERSION', 'DESCRIPTOR_LENGTH', 'DESCRIPTOR', 'STATUS', 'CREATED_AT', 'UPDATED_AT']
   };
 
   var ss = getSpreadsheet();

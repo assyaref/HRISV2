@@ -1,6 +1,12 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { LogIn, LogOut, MapPin, Camera, Download, Clock, Navigation } from 'lucide-react';
 import * as api from '../services/api';
+import {
+  getFaceStatus,
+  verifyLiveFace,
+  LEGACY_BACKEND_MESSAGE,
+  type FaceVerificationResult,
+} from '../services/faceClient';
 import type { Attendance } from '../types';
 import { Card, CardBody } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -12,7 +18,7 @@ import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { formatDate, formatTime, exportToExcel, getCurrentPosition, todayStr } from '../lib/utils';
 import { db } from '../lib/db';
-import { validateFace, verifyFaceFromBase64, decodeDescriptor, type FaceValidationResult, type FaceMatchResult } from '../services/faceRecognition';
+import { validateFace, type FaceValidationResult } from '../services/faceRecognition';
 
 export function AttendancePage() {
   const toast = useToast();
@@ -25,16 +31,16 @@ export function AttendancePage() {
   const [photo, setPhoto] = useState<string | null>(null);
   const [faceDescriptor, setFaceDescriptor] = useState<number[] | null>(null);
   const [faceValidation, setFaceValidation] = useState<FaceValidationResult | null>(null);
-  const [faceMatchResult, setFaceMatchResult] = useState<FaceMatchResult | null>(null);
-  const [faceRegistered, setFaceRegistered] = useState(false);
-  const [faceVerified, setFaceVerified] = useState(false);
+  // FACE ID v2: hasil verifikasi terstandar dari server (bukan matching lokal)
+  const [faceResult, setFaceResult] = useState<FaceVerificationResult | null>(null);
+  const [faceStatusKnown, setFaceStatusKnown] = useState<boolean | null>(null); // null = sedang cek
+  const [verifyingFace, setVerifyingFace] = useState(false);
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locLoading, setLocLoading] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const faceErrorShownRef = useRef(false);
   const isProcessingRef = useRef(false);
 
   // Gunakan API's official auto-heal function untuk konsistensi
@@ -87,11 +93,28 @@ export function AttendancePage() {
     setPhoto(null);
     setFaceDescriptor(null);
     setFaceValidation(null);
-    setFaceMatchResult(null);
-    setFaceRegistered(false);
-    setFaceVerified(false);
+    setFaceResult(null);
+    setFaceStatusKnown(null);
     setCameraOpen(true);
     await getLocation();
+
+    // FACE ID v2: cek status template WAJAH di SERVER dulu (bukan localStorage).
+    // Ini membedakan "belum terdaftar" dari masalah lain SEBELUM kamera dipakai.
+    try {
+      const status = await getFaceStatus();
+      if (status.code === 'UNKNOWN_ACTION') {
+        toast.error(LEGACY_BACKEND_MESSAGE);
+        setFaceStatusKnown(false);
+      } else {
+        setFaceStatusKnown(status.enrolled);
+        if (!status.enrolled) {
+          toast.warning('Wajah Anda belum terdaftar. Buka menu Face ID untuk mendaftarkan terlebih dahulu.');
+        }
+      }
+    } catch {
+      setFaceStatusKnown(null); // tidak bisa dipastikan; biarkan verifikasi server menentukan
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -107,88 +130,64 @@ export function AttendancePage() {
         await videoRef.current.play();
       }
     } catch {
-      toast.warning('Kamera tidak tersedia. Anda dapat check-in tanpa foto.');
+      toast.warning('Kamera tidak tersedia. Izinkan akses kamera lalu coba lagi.');
     }
   };
 
   const capturePhoto = async () => {
     if (!videoRef.current || isProcessingRef.current) return;
     isProcessingRef.current = true;
-    faceErrorShownRef.current = false;
-    
+
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0);
-      const photoData = canvas.toDataURL('image/jpeg', 0.92);
-      setPhoto(photoData);
-      
-      // Step 1: Validate face detection
-      const validation = validateFace(canvas);
-      setFaceValidation(validation);
-      
-      if (!validation.detected || !validation.descriptor) {
-        setFaceDescriptor(null);
-        setFaceVerified(false);
-        setFaceMatchResult(null);
-        toast.warning(validation.message || 'Wajah tidak terdeteksi dengan baik. Silakan coba lagi.');
-        return;
-      }
-      
-      setFaceDescriptor(validation.descriptor);
-      
-      // Step 2: Check if user has face registered in local database
-      const employee = healedSession?.employeeId ? db.getEmployeeById(healedSession.employeeId) : null;
-      const hasLocalDescriptor = employee?.faceDescriptor && String(employee.faceDescriptor).trim().length > 2 && employee.faceDescriptor !== '[]';
-      setFaceRegistered(!!hasLocalDescriptor);
-      
-      console.log('[FaceDebug] Check registration status:', {
-        employeeId: healedSession?.employeeId,
-        hasLocalDescriptor,
-        faceDescriptorLength: employee?.faceDescriptor?.length
-      });
-      
-      // Step 3: If face is registered locally, perform matching
-      if (hasLocalDescriptor) {
-        try {
-          const enrolledDescriptor = JSON.parse(employee!.faceDescriptor!);
-          
-          if (enrolledDescriptor && enrolledDescriptor.length > 0) {
-            // Verify face matching
-            const matchResult = await verifyFaceFromBase64(photoData, enrolledDescriptor);
-            setFaceMatchResult(matchResult);
-            
-            console.log('[FaceDebug] Face matching result:', {
-              matched: matchResult.matched,
-              similarity: matchResult.similarity,
-              message: matchResult.message
-            });
-            
-            if (matchResult.matched) {
-              setFaceVerified(true);
-              toast.success(`Wajah terverifikasi (${matchResult.similarity}%)`);
-            } else {
-              setFaceVerified(false);
-              toast.error(matchResult.message || 'Wajah tidak cocok. Silakan coba lagi.');
-            }
-          }
-        } catch (error) {
-          console.error('[FaceDebug] Error parsing face descriptor:', error);
-          setFaceVerified(false);
-          toast.error('Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.');
-        }
+    if (!ctx) {
+      isProcessingRef.current = false;
+      return;
+    }
+    ctx.drawImage(videoRef.current, 0, 0);
+    const photoData = canvas.toDataURL('image/jpeg', 0.92);
+    setPhoto(photoData);
+    setFaceResult(null);
+
+    // Step 1: validasi deteksi wajah di client (kualitas gambar)
+    const validation = validateFace(canvas);
+    setFaceValidation(validation);
+
+    if (!validation.detected || !validation.descriptor) {
+      setFaceDescriptor(null);
+      setFaceResult(null);
+      toast.warning(validation.message || 'Wajah tidak terdeteksi dengan baik. Silakan coba lagi.');
+      isProcessingRef.current = false;
+      return;
+    }
+
+    setFaceDescriptor(validation.descriptor);
+
+    // Step 2: VERIFIKASI SERVER-SIDE (1 capture = 1 request verifikasi).
+    // Server membandingkan dengan ACTIVE template milik user ini
+    // dan mengembalikan result code terstandar.
+    setVerifyingFace(true);
+    try {
+      const result = await verifyLiveFace(validation.descriptor);
+      setFaceResult(result);
+
+      console.log('[FACE DEBUG] attendance verify' +
+        ` | code=${result.code}` +
+        ` | template=${result.faceTemplateId ?? '-'}` +
+        ` | sim=${result.similarityPercent ?? '-'}%` +
+        ` | threshold=${result.threshold ?? '-'}` +
+        ` | requestId=${result.requestId ?? '-'}`);
+
+      if (result.success && result.code === 'VERIFIED') {
+        toast.success(`✅ Wajah terverifikasi (${result.similarityPercent}%)`);
       } else {
-        // Face not registered locally - still allow but inform user
-        setFaceVerified(false);
-        setFaceMatchResult(null);
-        if (!faceErrorShownRef.current) {
-          faceErrorShownRef.current = true;
-          toast.warning('Wajah terdeteksi tetapi belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.');
-        }
+        toast.error(result.message);
       }
+    } finally {
+      setVerifyingFace(false);
       isProcessingRef.current = false;
     }
   };
@@ -200,33 +199,55 @@ export function AttendancePage() {
     setPhoto(null);
     setFaceDescriptor(null);
     setFaceValidation(null);
-    setFaceMatchResult(null);
-    setFaceRegistered(false);
-    setFaceVerified(false);
+    setFaceResult(null);
+    setFaceStatusKnown(null);
     isProcessingRef.current = false;
-    faceErrorShownRef.current = false;
   };
 
   const submitCheck = async () => {
+    // Lock: 1 klik konfirmasi = 1 request check-in/out
+    if (checking || isProcessingRef.current) return;
+
+    let loc = location;
+    if (!loc) {
+      // GPS wajib (divalidasi juga di server)
+      try {
+        const pos = await getCurrentPosition();
+        loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setLocation(loc);
+      } catch {
+        toast.error('Koordinat GPS diperlukan untuk absensi. Aktifkan lokasi lalu coba lagi.');
+        return;
+      }
+    }
+
+    if (!faceDescriptor || !faceResult || faceResult.code !== 'VERIFIED') {
+      toast.error('Wajah belum terverifikasi. Ambil foto dan tunggu verifikasi berhasil dulu.');
+      return;
+    }
+
+    isProcessingRef.current = true;
     setChecking(true);
-    
-    // Build payload with face verification data
-    const payload = {
-      lat: location?.lat,
-      lng: location?.lng,
-      photo: photo || undefined,
-      faceDescriptor: faceDescriptor || undefined,
-      faceVerified: faceVerified || undefined,
-    };
-    
-    const res = checkType === 'in' ? await api.checkIn(payload) : await api.checkOut(payload);
-    setChecking(false);
-    if (res.success) {
-      toast.success(res.message);
-      stopCamera();
-      load();
-    } else {
-      toast.error(res.message);
+    try {
+      const payload = {
+        lat: loc.lat,
+        lng: loc.lng,
+        photo: photo || undefined,
+        faceDescriptor,
+      };
+      const res = checkType === 'in' ? await api.checkIn(payload) : await api.checkOut(payload);
+      if (res.success) {
+        toast.success(res.message);
+        stopCamera();
+        load();
+      } else {
+        // Tampilkan code agar kegagalan mudah didiagnosa, tanpa data biometrik
+        const code = (res as { code?: string }).code ? ` [${(res as { code?: string }).code}]` : '';
+        toast.error(`${res.message}${code}`);
+      }
+    } finally {
+      setChecking(false);
+      isProcessingRef.current = false;
     }
   };
 
@@ -381,7 +402,7 @@ export function AttendancePage() {
             <Button 
               onClick={submitCheck} 
               loading={checking}
-              disabled={!photo || !faceVerified}
+              disabled={!photo || verifyingFace || faceResult?.code !== 'VERIFIED'}
             >
               {checking ? 'Memproses...' : (checkType === 'in' ? 'Konfirmasi Check In' : 'Konfirmasi Check Out')}
             </Button>
@@ -420,29 +441,49 @@ export function AttendancePage() {
             </div>
           )}
 
-          {/* Face Registration Status */}
-          {photo && faceValidation?.detected && !faceRegistered && (
+          {faceStatusKnown === false && (
             <div className="p-3 rounded-xl text-sm bg-amber-50 dark:bg-amber-950/30 border border-amber-200 text-amber-700 dark:text-amber-300">
               <div className="flex items-center gap-2">
-                <span>⚠️ Wajah belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.</span>
+                <span>
+                  ⚠️ Belum ada template wajah aktif untuk akun ini.{' '}
+                  {session?.employeeId ? (
+                    <a href="#/face-enrollment" className="underline font-medium">Daftar di menu Face ID</a>
+                  ) : (
+                    'Hubungi admin HR.'
+                  )}
+                </span>
               </div>
             </div>
           )}
 
-          {/* Face Matching Status */}
-          {faceMatchResult && (
+          {/* Face Verification Result (dari SERVER, code terstandar) */}
+          {faceResult && (
             <div className={`p-3 rounded-xl text-sm ${
-              faceMatchResult.matched 
+              faceResult.success && faceResult.code === 'VERIFIED'
                 ? 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 text-emerald-700 dark:text-emerald-300'
                 : 'bg-red-50 dark:bg-red-950/30 border border-red-200 text-red-700 dark:text-red-300'
             }`}>
               <div className="flex items-center gap-2">
-                {faceMatchResult.matched ? (
-                  <span>✅ Wajah terverifikasi ({faceMatchResult.similarity}%)</span>
+                {faceResult.success && faceResult.code === 'VERIFIED' ? (
+                  <span>✅ Wajah terverifikasi ({faceResult.similarityPercent}%)</span>
                 ) : (
-                  <span>❌ {faceMatchResult.message}</span>
+                  <div>
+                    <p>{faceResult.message}</p>
+                    <p className="text-xs opacity-70 mt-1">Kode: {faceResult.code}</p>
+                    {faceResult.code === 'FACE_NOT_REGISTERED' && (
+                      <p className="text-xs mt-1 font-medium">
+                        Buka menu <strong>Face ID</strong> untuk mendaftarkan wajah Anda.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {verifyingFace && (
+            <div className="p-3 rounded-xl text-sm bg-blue-50 dark:bg-blue-950/30 border border-blue-200 text-blue-700 dark:text-blue-300">
+              ⏳ Memverifikasi wajah dengan server...
             </div>
           )}
 
@@ -479,9 +520,9 @@ export function AttendancePage() {
             </div>
           )}
           
-          {photo && !faceVerified && (
+          {photo && faceValidation?.detected && faceResult && faceResult.code !== 'VERIFIED' && !verifyingFace && (
             <div className="text-center text-sm text-amber-600">
-              <p>Wajah tidak terverifikasi. Silakan ambil foto ulang dengan posisi yang lebih baik.</p>
+              <p>Ambil foto ulang atau daftarkan wajah di menu Face ID jika masalah berlanjut.</p>
             </div>
           )}
         </div>

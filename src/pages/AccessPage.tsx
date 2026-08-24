@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Plus, Pencil, Trash2, Key, Shield, UserCheck, UserX, Mail, User as UserIcon, Scan, Eye } from 'lucide-react';
+﻿import { useEffect, useState, useCallback } from 'react';
+import { Plus, Pencil, Trash2, Key, Shield, UserCheck, Mail, User as UserIcon, Scan, Eye } from 'lucide-react';
 import Swal from 'sweetalert2';
 import * as api from '../services/api';
 import type { User, Role, Employee } from '../types';
@@ -601,9 +601,9 @@ export function AccessPage() {
               </p>
               <p className="text-xs text-slate-500 mt-1">
                 Status: {selectedEmployee.faceRegistered ? (
-                  <span className="text-emerald-600 font-medium">✓ Terdaftar</span>
+                  <span className="text-emerald-600 font-medium">âœ“ Terdaftar</span>
                 ) : (
-                  <span className="text-red-600 font-medium">✗ Belum Terdaftar</span>
+                  <span className="text-red-600 font-medium">âœ— Belum Terdaftar</span>
                 )}
               </p>
             </div>
@@ -647,7 +647,7 @@ export function AccessPage() {
               <div className="space-y-3">
                 <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
                   <p className="text-sm font-medium text-amber-800 dark:text-amber-300 mb-2">
-                    ⚠️ Face Descriptor Lengkap (128 Fitur)
+                    âš ï¸ Face Descriptor Lengkap (128 Fitur)
                   </p>
                   <p className="text-xs text-amber-700 dark:text-amber-400">
                     Jangan bagikan data ini kepada pihak yang tidak berwenang. Data ini digunakan untuk verifikasi identitas karyawan.

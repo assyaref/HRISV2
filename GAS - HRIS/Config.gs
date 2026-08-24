@@ -30,9 +30,15 @@ var CONFIG = {
   OFFICE_LNG: 101.181111,
   OFFICE_RADIUS: 200,
   get FACE_SIMILARITY_THRESHOLD() {
+    // Server-side threshold. Client TIDAK BOLEH menurunkan nilai ini.
     var stored = PropertiesService.getScriptProperties().getProperty('FACE_SIMILARITY_THRESHOLD');
     return stored ? Number(stored) : 0.55;
   },
+
+  // ===== FACE ID v2 (arsitektur FACE_TEMPLATES) =====
+  FACE_MODEL: 'CANVAS_HISTOGRAM',
+  FACE_MODEL_VERSION: '1.0',
+  FACE_DESCRIPTOR_VERSION: 1,
 
   SHEETS: {
     EMPLOYEE: 'EMPLOYEE',
@@ -47,7 +53,8 @@ var CONFIG = {
     SETTING: 'SETTING',
     ANNOUNCEMENT: 'ANNOUNCEMENT',
     LOGS: 'LOGS',
-    SESSIONS: 'SESSIONS'
+    SESSIONS: 'SESSIONS',
+    FACE_TEMPLATES: 'FACE_TEMPLATES'
   }
 };
 

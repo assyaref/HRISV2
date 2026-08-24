@@ -1,14 +1,20 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Camera, CheckCircle2, XCircle, User, Shield, RefreshCw } from 'lucide-react';
+import { Camera, CheckCircle2, XCircle, User, Shield, RefreshCw, Stethoscope } from 'lucide-react';
 import Swal from 'sweetalert2';
-import * as api from '../services/api';
+import {
+  enrollFace,
+  getFaceStatus,
+  deactivateFace,
+  diagnoseFace,
+  LEGACY_BACKEND_MESSAGE,
+  type FaceDiagnosis,
+} from '../services/faceClient';
 import { validateFace } from '../services/faceRecognition';
 import { Card, CardBody, CardHeader, CardTitle } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
-import { db } from '../lib/db';
 import { cn } from '../lib/utils';
 
 export function FaceEnrollmentPage() {
@@ -24,9 +30,34 @@ export function FaceEnrollmentPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
+  // FACE ID v2: metadata template aktif dari server
+  const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
+  const [diagnosis, setDiagnosis] = useState<FaceDiagnosis | null>(null);
+  const [diagnosing, setDiagnosing] = useState(false);
 
-  const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null)
-    || (session?.email ? db.getEmployees().find(e => e.email.toLowerCase() === session.email.toLowerCase()) : null); 
+  const runDiagnosis = useCallback(async () => {
+    setDiagnosing(true);
+    try {
+      const res = await diagnoseFace();
+      if (!res.ok || !res.data) {
+        toast.error(res.message || 'Diagnosa gagal.');
+        setDiagnosis(null);
+      } else {
+        setDiagnosis(res.data);
+        console.log(
+          `[FACE DEBUG] diagnose | healthy=${res.data.healthy}` +
+          ` | template=${res.data.activeTemplateId || '-'}` +
+          ` | length=${res.data.descriptorLength ?? '-'}` +
+          ` | model=${res.data.expectedModel ?? '-'}`
+        );
+      }
+    } finally {
+      setDiagnosing(false);
+    }
+  }, [toast]);
+
+  // FACE ID v2: identitas hanya dari session (immutable userId) - bukan localStorage
+  const displayName = session?.name || 'Pengguna';
 
   // Properly release camera resources
   const releaseCamera = useCallback(() => {
@@ -88,9 +119,22 @@ export function FaceEnrollmentPage() {
   }, []);
 
   const checkEnrollmentStatus = async () => {
-    const res = await api.getFaceEnrollmentStatus();
-    if (res.success && res.data) {
-      setEnrolled(res.data.enrolled);
+    // FACE ID v2: status diambil dari SERVER (FACE_TEMPLATES), bukan localStorage
+    const res = await getFaceStatus();
+    if (res.code === 'UNKNOWN_ACTION') {
+      toast.error(LEGACY_BACKEND_MESSAGE);
+      setEnrolled(false);
+      setActiveTemplateId(null);
+    } else if (res.enrolled) {
+      setEnrolled(true);
+      setActiveTemplateId(res.faceTemplateId || null);
+    } else if (res.code === 'INVALID_TEMPLATE' || res.modelCompatible === false) {
+      toast.error('Data wajah terdaftar tidak kompatibel. Silakan daftarkan ulang wajah Anda.');
+      setEnrolled(false);
+      setActiveTemplateId(null);
+    } else {
+      setEnrolled(false);
+      setActiveTemplateId(null);
     }
     setLoading(false);
   };
@@ -175,18 +219,48 @@ export function FaceEnrollmentPage() {
       toast.error('Ambil foto terlebih dahulu');
       return;
     }
+    if (enrolling) return;
 
     setEnrolling(true);
-    const res = await api.enrollFace(validation.descriptor);
-    setEnrolling(false);
+    try {
+      // FACE ID v2: registrasi transaksional.
+      // Server melakukan WRITE -> READ BACK -> VALIDATE.
+      // Sukses hanya jika data benar-benar bisa dibaca kembali dari database.
+      const result = await enrollFace(validation.descriptor);
 
-    if (res.success) {
-      toast.success('Wajah berhasil didaftarkan!');
-      setEnrolled(true);
-      setUpdating(false);
-      stopCamera();
-    } else {
-      toast.error(res.message);
+      if (result.success) {
+        setEnrolled(true);
+        setActiveTemplateId(result.faceTemplateId || null);
+        setUpdating(false);
+        stopCamera();
+
+        console.log(
+          `[FACE DEBUG] enroll OK` +
+          ` | template=${result.faceTemplateId ?? '-'}` +
+          ` | length=${result.descriptorLength ?? '-'}` +
+          ` | readBack=${result.readBackValidated}` +
+          ` | requestId=${result.requestId ?? '-'}`
+        );
+
+        await Swal.fire({
+          icon: 'success',
+          title: 'Wajah Berhasil Didaftarkan',
+          html:
+            '<p>Template Face ID Anda tersimpan dan <b>sudah diverifikasi dapat dibaca kembali</b> dari database.</p>' +
+            `<p style="font-size:0.85em;color:#64748b">Template ID: <code>${result.faceTemplateId ?? '-'}</code></p>`,
+          confirmButtonColor: '#0D47A1',
+        });
+        runDiagnosis();
+      } else {
+        await Swal.fire({
+          icon: 'error',
+          title: 'Registrasi Gagal',
+          text: result.message,
+          confirmButtonColor: '#0D47A1',
+        });
+      }
+    } finally {
+      setEnrolling(false);
     }
   };
 
@@ -198,7 +272,7 @@ export function FaceEnrollmentPage() {
   const handleReset = async () => {
     const result = await Swal.fire({
       title: 'Reset Pendaftaran Wajah?',
-      text: 'Anda akan menghapus data wajah yang terdaftar dan harus mendaftar ulang.',
+      text: 'Template wajah Anda akan dinonaktifkan di server dan harus mendaftar ulang.',
       icon: 'warning',
       showCancelButton: true,
       confirmButtonColor: '#D32F2F',
@@ -208,18 +282,21 @@ export function FaceEnrollmentPage() {
 
     if (!result.isConfirmed) return;
 
-    // Reset face enrollment
-    if (employee) {
-      const employees = db.getEmployees();
-      const idx = employees.findIndex((e) => e.id === employee.id);
-      if (idx >= 0) {
-        employees[idx].faceDescriptor = undefined;
-        employees[idx].faceRegistered = false;
-        db.setEmployees(employees);
+    setUpdating(true);
+    try {
+      // FACE ID v2: nonaktifkan template di SERVER (bukan localStorage)
+      const res = await deactivateFace();
+      if (res.success) {
         setEnrolled(false);
+        setActiveTemplateId(null);
         setUpdating(false);
-        toast.success('Pendaftaran wajah berhasil direset');
+        toast.success('Pendaftaran wajah berhasil direset di server');
+        runDiagnosis();
+      } else {
+        toast.error(res.message);
       }
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -271,21 +348,17 @@ export function FaceEnrollmentPage() {
         </CardBody>
       </Card>
 
-      {/* Employee Info */}
-      {employee && (
+      {/* User Info (identitas dari session, bukan localStorage) */}
+      {session && (
         <Card>
           <CardBody className="pt-5">
             <div className="flex items-center gap-4">
               <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
-                {employee.photo ? (
-                  <img src={employee.photo} alt={employee.fullName} className="h-16 w-16 rounded-full object-cover" />
-                ) : (
-                  <User className="h-8 w-8 text-primary" />
-                )}
+                <User className="h-8 w-8 text-primary" />
               </div>
               <div>
-                <p className="font-semibold text-slate-800 dark:text-white">{employee.fullName}</p>
-                <p className="text-sm text-slate-500">{employee.employeeId}</p>
+                <p className="font-semibold text-slate-800 dark:text-white">{displayName}</p>
+                <p className="text-sm text-slate-500">{session.email}</p>
                 <Badge status={enrolled ? 'Active' : 'Resigned'} className="mt-1">
                   {enrolled ? '✓ Wajah Terdaftar' : 'Belum Terdaftar'}
                 </Badge>
@@ -503,9 +576,14 @@ export function FaceEnrollmentPage() {
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">
                 Wajah Sudah Terdaftar
               </h3>
-              <p className="text-sm text-slate-500 mb-4">
-                Wajah Anda telah terdaftar dan siap untuk verifikasi absensi
+              <p className="text-sm text-slate-500 mb-1">
+                Wajah Anda telah terdaftar di server dan siap untuk verifikasi absensi
               </p>
+              {activeTemplateId && (
+                <p className="text-xs text-slate-400 mb-4 font-mono">
+                  Template ID: {activeTemplateId}
+                </p>
+              )}
               <div className="flex gap-2 justify-center">
                 <Button variant="outline" onClick={handleStartEnrollment}>
                   <RefreshCw className="h-4 w-4" /> Update Foto
@@ -515,6 +593,54 @@ export function FaceEnrollmentPage() {
                 </Button>
               </div>
             </div>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Diagnostics Panel - test database layer sebelum camera */}
+      {!cameraActive && !updating && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Stethoscope className="h-4 w-4" /> Diagnosa Database Face ID
+            </CardTitle>
+          </CardHeader>
+          <CardBody>
+            <p className="text-sm text-slate-500 mb-3">
+              Periksa apakah layer database Face ID sehat untuk akun Anda (template ada, aktif,
+              descriptor valid, model kompatibel) — sebelum menguji kamera.
+            </p>
+            <Button variant="secondary" onClick={runDiagnosis} loading={diagnosing}>
+              Jalankan Diagnosa
+            </Button>
+
+            {diagnosis && (
+              <div className={cn(
+                'mt-4 p-4 rounded-xl border text-sm',
+                diagnosis.healthy
+                  ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30'
+                  : 'bg-red-50 border-red-200 dark:bg-red-950/30'
+              )}>
+                <p className={cn(
+                  'font-semibold mb-2',
+                  diagnosis.healthy ? 'text-emerald-800 dark:text-emerald-300' : 'text-red-800 dark:text-red-300'
+                )}>
+                  {diagnosis.summary}
+                </p>
+                <ul className="space-y-1 text-xs">
+                  <li>{diagnosis.checks.userFound ? '✅' : '❌'} User ditemukan</li>
+                  <li>{diagnosis.checks.employeeFound ? '✅' : '⚠️'} Data karyawan terhubung</li>
+                  <li>{diagnosis.checks.templateFound ? '✅' : '❌'} Template wajah ditemukan ({diagnosis.templateCount ?? 0})</li>
+                  <li>{diagnosis.checks.templateActive ? '✅' : '❌'} Template berstatus ACTIVE</li>
+                  <li>{diagnosis.checks.descriptorValid ? '✅' : '❌'} Descriptor valid</li>
+                  <li>{diagnosis.checks.modelCompatible ? '✅' : '❌'} Model kompatibel ({diagnosis.expectedModel} v{diagnosis.expectedModelVersion})</li>
+                  <li>{diagnosis.checks.readBackSuccess ? '✅' : '❌'} Read-back berhasil</li>
+                </ul>
+                {diagnosis.activeTemplateId && (
+                  <p className="text-xs text-slate-400 mt-2 font-mono">ID: {diagnosis.activeTemplateId}</p>
+                )}
+              </div>
+            )}
           </CardBody>
         </Card>
       )}

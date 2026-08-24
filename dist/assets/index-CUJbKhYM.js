@@ -15701,229 +15701,6 @@ const db = {
   importAll,
   reset: resetDatabase
 };
-function extractFaceDescriptor(canvas) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  const width = 128;
-  const height = 128;
-  const tempCanvas = document.createElement("canvas");
-  tempCanvas.width = width;
-  tempCanvas.height = height;
-  const tempCtx = tempCanvas.getContext("2d");
-  if (!tempCtx) return null;
-  tempCtx.drawImage(canvas, 0, 0, width, height);
-  const imageData = tempCtx.getImageData(0, 0, width, height);
-  const pixels = imageData.data;
-  const descriptor = [];
-  let skinR = 0, skinG = 0, skinB = 0, skinCount = 0;
-  for (let i2 = 0; i2 < pixels.length; i2 += 4) {
-    const r2 = pixels[i2], g2 = pixels[i2 + 1], b2 = pixels[i2 + 2];
-    const isSkin = r2 > 70 && g2 > 35 && b2 > 18 && r2 > g2 && r2 > b2 && Math.abs(r2 - g2) > 10;
-    if (isSkin) {
-      skinR += r2;
-      skinG += g2;
-      skinB += b2;
-      skinCount++;
-    }
-  }
-  if (skinCount > 0) {
-    descriptor.push(skinR / skinCount / 255);
-    descriptor.push(skinG / skinCount / 255);
-    descriptor.push(skinB / skinCount / 255);
-    descriptor.push(skinCount / (width * height));
-  } else {
-    return null;
-  }
-  const gridSize = 8;
-  const cellW = Math.floor(width / gridSize);
-  const cellH = Math.floor(height / gridSize);
-  for (let gy = 0; gy < gridSize; gy++) {
-    for (let gx = 0; gx < gridSize; gx++) {
-      let sum = 0, count = 0;
-      for (let y2 = gy * cellH; y2 < (gy + 1) * cellH && y2 < height; y2++) {
-        for (let x2 = gx * cellW; x2 < (gx + 1) * cellW && x2 < width; x2++) {
-          const i2 = (y2 * width + x2) * 4;
-          sum += (pixels[i2] + pixels[i2 + 1] + pixels[i2 + 2]) / 3;
-          count++;
-        }
-      }
-      descriptor.push(sum / count / 255);
-    }
-  }
-  let edgeSum = 0;
-  for (let y2 = 1; y2 < height - 1; y2++) {
-    for (let x2 = 1; x2 < width - 1; x2++) {
-      const i2 = (y2 * width + x2) * 4;
-      const center = (pixels[i2] + pixels[i2 + 1] + pixels[i2 + 2]) / 3;
-      const left = (pixels[(y2 * width + (x2 - 1)) * 4] + pixels[(y2 * width + (x2 - 1)) * 4 + 1] + pixels[(y2 * width + (x2 - 1)) * 4 + 2]) / 3;
-      const right = (pixels[(y2 * width + (x2 + 1)) * 4] + pixels[(y2 * width + (x2 + 1)) * 4 + 1] + pixels[(y2 * width + (x2 + 1)) * 4 + 2]) / 3;
-      const top = (pixels[((y2 - 1) * width + x2) * 4] + pixels[((y2 - 1) * width + x2) * 4 + 1] + pixels[((y2 - 1) * width + x2) * 4 + 2]) / 3;
-      const bottom = (pixels[((y2 + 1) * width + x2) * 4] + pixels[((y2 + 1) * width + x2) * 4 + 1] + pixels[((y2 + 1) * width + x2) * 4 + 2]) / 3;
-      edgeSum += Math.abs(center - left) + Math.abs(center - right) + Math.abs(center - top) + Math.abs(center - bottom);
-    }
-  }
-  descriptor.push(edgeSum / (width * height) / 255);
-  let symmetryScore = 0;
-  const halfW = Math.floor(width / 2);
-  for (let y2 = 0; y2 < height; y2++) {
-    for (let x2 = 0; x2 < halfW; x2++) {
-      const leftI = (y2 * width + x2) * 4;
-      const rightI = (y2 * width + (width - 1 - x2)) * 4;
-      const diff = Math.abs(pixels[leftI] - pixels[rightI]) + Math.abs(pixels[leftI + 1] - pixels[rightI + 1]) + Math.abs(pixels[leftI + 2] - pixels[rightI + 2]);
-      symmetryScore += diff;
-    }
-  }
-  descriptor.push(1 - symmetryScore / (width * height * 3 * 255));
-  return descriptor;
-}
-function cosineSimilarity(a2, b2) {
-  if (a2.length !== b2.length) return 0;
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i2 = 0; i2 < a2.length; i2++) {
-    dotProduct += a2[i2] * b2[i2];
-    normA += a2[i2] * a2[i2];
-    normB += b2[i2] * b2[i2];
-  }
-  const similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  return Math.max(0, Math.min(1, similarity));
-}
-function validateFace(canvas) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    return {
-      detected: false,
-      faceCount: 0,
-      confidence: 0,
-      details: { hasFace: false, brightness: 0, hasEyes: false, hasMouth: false, isBlurry: false, facePosition: "unknown" },
-      message: "❌ Canvas tidak tersedia"
-    };
-  }
-  const width = canvas.width;
-  const height = canvas.height;
-  const imageData = ctx.getImageData(0, 0, width, height);
-  const pixels = imageData.data;
-  let totalBrightness = 0;
-  let skinPixelCount = 0;
-  let skinCenterX = 0, skinCenterY = 0;
-  for (let y2 = 0; y2 < height; y2 += 4) {
-    for (let x2 = 0; x2 < width; x2 += 4) {
-      const i2 = (y2 * width + x2) * 4;
-      const r2 = pixels[i2], g2 = pixels[i2 + 1], b2 = pixels[i2 + 2];
-      const brightness = (r2 + g2 + b2) / 3;
-      totalBrightness += brightness;
-      const isSkin = r2 > 85 && g2 > 40 && b2 > 20 && r2 > g2 && r2 > b2 && Math.abs(r2 - g2) > 15;
-      if (isSkin) {
-        skinPixelCount++;
-        skinCenterX += x2;
-        skinCenterY += y2;
-      }
-    }
-  }
-  const avgBrightness = totalBrightness / (width * height / 16);
-  const totalPixels = width / 4 * (height / 4);
-  const skinRatio = skinPixelCount / totalPixels;
-  const faceCX = skinPixelCount > 0 ? skinCenterX / skinPixelCount : width / 2;
-  const faceCY = skinPixelCount > 0 ? skinCenterY / skinPixelCount : height / 2;
-  const faceCenterX = faceCX / width * 100;
-  const faceCenterY = faceCY / height * 100;
-  let blurScore = 0, sampleCount = 0;
-  for (let y2 = 2; y2 < height - 2; y2 += 8) {
-    for (let x2 = 2; x2 < width - 2; x2 += 8) {
-      const i2 = (y2 * width + x2) * 4;
-      const center = (pixels[i2] + pixels[i2 + 1] + pixels[i2 + 2]) / 3;
-      const left = (pixels[(y2 * width + (x2 - 2)) * 4] + pixels[(y2 * width + (x2 - 2)) * 4 + 1] + pixels[(y2 * width + (x2 - 2)) * 4 + 2]) / 3;
-      const right = (pixels[(y2 * width + (x2 + 2)) * 4] + pixels[(y2 * width + (x2 + 2)) * 4 + 1] + pixels[(y2 * width + (x2 + 2)) * 4 + 2]) / 3;
-      blurScore += Math.abs(center - left) + Math.abs(center - right);
-      sampleCount++;
-    }
-  }
-  const avgBlur = blurScore / sampleCount;
-  const isBlurry = avgBlur < 5;
-  let facePosition = "center";
-  if (faceCenterX < 30) facePosition = "left";
-  else if (faceCenterX > 70) facePosition = "right";
-  else if (faceCenterY < 30) facePosition = "top";
-  else if (faceCenterY > 70) facePosition = "bottom";
-  const hasFace = skinRatio > 0.05 && skinRatio < 0.5;
-  const hasEyes = hasFace && faceCenterY > 25 && faceCenterY < 65;
-  const hasMouth = hasFace && faceCenterY > 50 && faceCenterY < 80;
-  let confidence = 0;
-  if (hasFace) confidence += 40;
-  if (!isBlurry) confidence += 20;
-  if (avgBrightness > 15 && avgBrightness < 240) confidence += 15;
-  if (skinRatio > 0.06 && skinRatio < 0.4) confidence += 15;
-  if (facePosition === "center") confidence += 10;
-  let descriptor;
-  if (hasFace) {
-    const extracted = extractFaceDescriptor(canvas);
-    if (extracted) descriptor = extracted;
-  }
-  const messages2 = [];
-  if (hasFace && !isBlurry && avgBrightness > 20 && avgBrightness < 230) {
-    messages2.push("✅ Wajah terverifikasi");
-  } else {
-    if (!hasFace) messages2.push("❌ Wajah tidak terdeteksi");
-    if (isBlurry) messages2.push("📷 Foto blur");
-    if (avgBrightness < 20) messages2.push("🌑 Terlalu gelap");
-    if (avgBrightness > 230) messages2.push("☀️ Terlalu terang");
-    if (facePosition !== "center") messages2.push("🎯 Posisikan wajah di tengah");
-  }
-  return {
-    detected: hasFace && !isBlurry && confidence > 50,
-    faceCount: hasFace ? 1 : 0,
-    confidence: Math.min(100, confidence),
-    descriptor,
-    details: { hasFace, brightness: Math.round(avgBrightness), hasEyes, hasMouth, isBlurry, facePosition },
-    message: messages2.join(". ") || "❌ Wajah tidak valid"
-  };
-}
-function verifyFace(selfieCanvas, enrolledDescriptor, threshold = 0.55) {
-  const validation = validateFace(selfieCanvas);
-  if (!validation.detected || !validation.descriptor) {
-    return {
-      matched: false,
-      similarity: 0,
-      message: validation.message || "❌ Wajah tidak valid untuk verifikasi"
-    };
-  }
-  const similarity = cosineSimilarity(validation.descriptor, enrolledDescriptor);
-  const matched = similarity >= threshold;
-  if (matched) {
-    return {
-      matched: true,
-      similarity: Math.round(similarity * 100),
-      message: `✅ Wajah cocok (${Math.round(similarity * 100)}% match)`
-    };
-  }
-  return {
-    matched: false,
-    similarity: Math.round(similarity * 100),
-    message: `❌ Wajah tidak cocok (${Math.round(similarity * 100)}%). Gunakan wajah yang sudah terdaftar.`
-  };
-}
-async function verifyFaceFromBase64(base64Data, enrolledDescriptor) {
-  return new Promise((resolve2) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(img, 0, 0);
-        resolve2(verifyFace(canvas, enrolledDescriptor));
-      } else {
-        resolve2({ matched: false, similarity: 0, message: "❌ Gagal memproses gambar" });
-      }
-    };
-    img.onerror = () => {
-      resolve2({ matched: false, similarity: 0, message: "❌ Gagal memuat gambar" });
-    };
-    img.src = base64Data;
-  });
-}
 const scriptRel = "modulepreload";
 const assetsURL = function(dep, importerUrl) {
   return new URL(dep, importerUrl).href;
@@ -21160,14 +20937,6 @@ function downloadBlob(blob, filename) {
   a2.click();
   URL.revokeObjectURL(url);
 }
-function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R2 = 6371e3;
-  const toRad = (d2) => d2 * Math.PI / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a2 = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R2 * 2 * Math.atan2(Math.sqrt(a2), Math.sqrt(1 - a2));
-}
 function compressImage(file, maxWidth = 800, quality = 0.7) {
   return new Promise((resolve2, reject) => {
     const reader = new FileReader();
@@ -21234,6 +21003,163 @@ function paginate(items2, page, perPage) {
     totalPages
   };
 }
+function validateDescriptor(descriptor) {
+  if (!descriptor) return false;
+  if (!Array.isArray(descriptor)) return false;
+  if (descriptor.length === 0) return false;
+  for (const value of descriptor) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return false;
+  }
+  return true;
+}
+function makeRequestId(prefix) {
+  const uuid = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${uuid}`;
+}
+async function faceCall(action, payload, fallbackCode) {
+  try {
+    return await gasRequest(action, payload);
+  } catch (err) {
+    console.error("[FACE] request failed:", action, err);
+    return {
+      success: false,
+      code: fallbackCode,
+      message: "Tidak dapat menghubungi server. Periksa koneksi internet Anda lalu coba lagi."
+    };
+  }
+}
+function isLegacyBackend(res) {
+  if (res.code === "UNKNOWN_ACTION") return true;
+  const m2 = String(res.message || "");
+  return m2.includes("Action tidak dikenali");
+}
+const LEGACY_BACKEND_MESSAGE = "Backend belum diperbarui ke versi baru. Admin perlu deploy ulang Google Apps Script terbaru (folder GAS - HRIS), lalu jalankan action migrateFaceTemplates sekali.";
+function logDebug(stage, requestId, res) {
+  console.log(
+    `[FACE DEBUG] ${stage} | requestId=${requestId} | code=${res.code ?? "-"} | success=${res.success ?? "-"} | template=${res.faceTemplateId ?? "-"} | sim=${res.similarityPercent ?? "-"}% | threshold=${res.threshold ?? "-"}`
+  );
+}
+async function enrollFace(descriptor) {
+  const requestId = makeRequestId("FACEREG");
+  if (!validateDescriptor(descriptor)) {
+    console.warn(`[FACE DEBUG] ${requestId} enroll rejected: INVALID_DESCRIPTOR (client-side)`);
+    return {
+      success: false,
+      code: "INVALID_DESCRIPTOR",
+      message: "Data wajah tidak valid. Silakan ambil foto ulang.",
+      requestId
+    };
+  }
+  const res = await faceCall("faceEnroll", { faceDescriptor: descriptor }, "NETWORK_ERROR");
+  logDebug("enroll", requestId, res);
+  if (!res.success) {
+    return {
+      success: false,
+      code: res.code || "REGISTRATION_FAILED",
+      message: String(res.message || "Registrasi wajah gagal."),
+      requestId
+    };
+  }
+  return {
+    success: true,
+    code: "VERIFIED",
+    message: String(res.message || "Wajah berhasil didaftarkan."),
+    faceTemplateId: res.faceTemplateId,
+    descriptorLength: res.descriptorLength,
+    readBackValidated: res.readBackValidated === true,
+    requestId
+  };
+}
+async function getFaceStatus() {
+  const res = await faceCall("faceStatus", {}, "NETWORK_ERROR");
+  if (!res.success) {
+    if (isLegacyBackend(res)) {
+      return { enrolled: false, code: "UNKNOWN_ACTION" };
+    }
+    return { enrolled: false, code: res.code || "VERIFICATION_ERROR" };
+  }
+  return {
+    enrolled: res.enrolled === true,
+    code: res.code || "VERIFIED",
+    userId: res.userId,
+    faceTemplateId: res.faceTemplateId,
+    descriptorLength: res.descriptorLength,
+    descriptorValid: res.descriptorValid,
+    modelCompatible: res.modelCompatible,
+    model: res.model,
+    modelVersion: res.modelVersion,
+    descriptorVersion: res.descriptorVersion,
+    createdAt: res.createdAt
+  };
+}
+async function verifyLiveFace(descriptor) {
+  const requestId = makeRequestId("FACEVERIFY");
+  if (!validateDescriptor(descriptor)) {
+    return {
+      success: false,
+      code: "INVALID_DESCRIPTOR",
+      message: "Wajah tidak terdeteksi dengan baik. Ambil foto ulang.",
+      requestId
+    };
+  }
+  const res = await faceCall("faceVerifyLive", { faceDescriptor: descriptor }, "NETWORK_ERROR");
+  logDebug("verifyLive", requestId, res);
+  if (!res.success) {
+    return {
+      success: false,
+      code: res.code || "VERIFICATION_ERROR",
+      message: String(res.message || "Verifikasi wajah gagal."),
+      userId: res.userId,
+      faceTemplateId: res.faceTemplateId,
+      similarity: res.similarity,
+      similarityPercent: res.similarityPercent,
+      threshold: res.threshold,
+      requestId
+    };
+  }
+  return {
+    success: true,
+    code: "VERIFIED",
+    message: String(res.message || "Wajah terverifikasi."),
+    userId: res.userId,
+    faceTemplateId: res.faceTemplateId,
+    similarity: res.similarity,
+    similarityPercent: res.similarityPercent,
+    threshold: res.threshold,
+    requestId
+  };
+}
+async function diagnoseFace() {
+  const res = await faceCall("faceDiagnose", {}, "NETWORK_ERROR");
+  if (!res.success) {
+    return { ok: false, message: String(res.message || "Diagnosa gagal.") };
+  }
+  return {
+    ok: true,
+    data: {
+      healthy: res.healthy === true,
+      summary: String(res.summary || ""),
+      checks: res.checks,
+      templateCount: res.templateCount,
+      activeTemplateId: res.activeTemplateId,
+      descriptorLength: res.descriptorLength,
+      expectedModel: res.expectedModel,
+      expectedModelVersion: res.expectedModelVersion,
+      expectedDescriptorVersion: res.expectedDescriptorVersion,
+      threshold: res.threshold
+    }
+  };
+}
+async function deactivateFace() {
+  const res = await faceCall("faceDeactivate", {}, "NETWORK_ERROR");
+  return {
+    success: res.success === true,
+    message: String(
+      res.message || (res.success ? "Wajah dinonaktifkan." : "Gagal menonaktifkan wajah.")
+    )
+  };
+}
 const SESSION_KEY = "gas_session";
 const FALLBACK_KEY$1 = "use_gas_backend";
 const API_DELAY = 300;
@@ -21294,20 +21220,18 @@ function findEmployeeForSession(session) {
   }
   return void 0;
 }
+function normalizeEmployeeId(value) {
+  return String(value ?? "").trim().toUpperCase();
+}
 function autoHealSessionEmployeeId(session) {
   const employee = findEmployeeForSession(session);
-  if (employee && (!session.employeeId || session.employeeId !== employee.id)) {
+  if (employee && (!session.employeeId || normalizeEmployeeId(session.employeeId) !== normalizeEmployeeId(employee.id))) {
     const healedSession = { ...session, employeeId: employee.id };
     saveSession(healedSession);
-    console.log(`[Auto-Heal] Updated session.employeeId: "${session.employeeId}" → "${employee.id}" for ${employee.fullName}`);
+    console.log(`[Auto-Heal] Updated session.employeeId: "${session.employeeId}" â†’ "${employee.id}" for ${employee.fullName}`);
     return healedSession;
   }
   return session;
-}
-function isFaceEnrolled(employee) {
-  if (!employee) return false;
-  const desc = String(employee.faceDescriptor || "").trim();
-  return desc.length > 2 && desc !== "[]";
 }
 async function callAPI(action, payload = {}) {
   const useGas = shouldUseGAS();
@@ -21360,7 +21284,7 @@ async function login(email, password, remember = false) {
   const employee = db.getEmployees().find((e) => e.email.toLowerCase() === email.toLowerCase());
   if (employee && employee.id) {
     employeeId = employee.id;
-    console.log(`[Auto-Heal] Updated session.employeeId: "${user.employeeId}" → "${employeeId}" for ${email}`);
+    console.log(`[Auto-Heal] Updated session.employeeId: "${user.employeeId}" â†’ "${employeeId}" for ${email}`);
   }
   const session = {
     token,
@@ -21705,58 +21629,6 @@ async function deletePosition(id2) {
     return ok(null, "Jabatan dihapus");
   }
 }
-function cosineSim(a2, b2) {
-  const len = Math.min(a2.length, b2.length);
-  let dot = 0, na = 0, nb = 0;
-  for (let i2 = 0; i2 < len; i2++) {
-    dot += a2[i2] * b2[i2];
-    na += a2[i2] * a2[i2];
-    nb += b2[i2] * b2[i2];
-  }
-  return na && nb ? Math.max(0, Math.min(1, dot / (Math.sqrt(na) * Math.sqrt(nb)))) : 0;
-}
-async function resolveLocalFaceVerification(payload) {
-  const session = getSession();
-  if (!session) return { success: false, message: "Sesi tidak valid. Silakan login kembali." };
-  if (!payload.photo && (!payload.faceDescriptor || payload.faceDescriptor.length === 0)) {
-    return { success: false, message: "Foto wajah diperlukan untuk absensi." };
-  }
-  const employee = findEmployeeForSession(session);
-  const hasLocalDescriptor = isFaceEnrolled(employee);
-  if (hasLocalDescriptor) {
-    let enrolledDescriptor;
-    try {
-      enrolledDescriptor = JSON.parse(employee.faceDescriptor);
-    } catch {
-      return { success: false, message: "Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID." };
-    }
-    if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-      return { success: false, message: "Data wajah tidak valid. Silakan daftarkan ulang." };
-    }
-    if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-      const sim = cosineSim(payload.faceDescriptor, enrolledDescriptor);
-      if (sim < 0.55) {
-        return { success: false, message: `Verifikasi wajah gagal. Wajah tidak cocok (${Math.round(sim * 100)}%). Pastikan wajah Anda sama dengan saat pendaftaran.` };
-      }
-      return { success: true, message: "OK", descriptor: enrolledDescriptor };
-    }
-    if (payload.photo) {
-      const result = await verifyFaceFromBase64(payload.photo, enrolledDescriptor);
-      if (!result.matched) {
-        return { success: false, message: result.message || "Verifikasi wajah gagal. Wajah tidak cocok." };
-      }
-      return { success: true, message: "OK", descriptor: enrolledDescriptor };
-    }
-  }
-  if (payload.faceDescriptor && payload.faceDescriptor.length > 0) {
-    console.log("[FaceVerify] No local descriptor, delegating verification to GAS");
-    return { success: true, message: "OK", descriptor: payload.faceDescriptor, skipLocalVerify: true };
-  }
-  return {
-    success: false,
-    message: "Wajah Anda belum terdaftar di perangkat ini. Silakan daftarkan wajah terlebih dahulu di menu Face ID."
-  };
-}
 async function getAttendances(filters) {
   try {
     return await callAPI("getAttendances", {
@@ -21775,179 +21647,55 @@ async function getAttendances(filters) {
     return ok(list);
   }
 }
-function isGASFaceError(msg) {
-  const m2 = msg.toLowerCase();
-  return m2.includes("belum terdaftar") || m2.includes("wajah") || m2.includes("face") || m2.includes("descriptor");
-}
 async function checkIn(payload) {
-  const localVerified = await resolveLocalFaceVerification(payload);
-  if (!localVerified.success) return localVerified;
-  const gasPayload = localVerified.skipLocalVerify ? {
-    lat: payload.lat || 0,
-    lng: payload.lng || 0,
-    photo: payload.photo || "",
-    faceDescriptor: localVerified.descriptor || [],
-    faceVerified: false
-    // paksa GAS verifikasi similarity
-  } : {
-    lat: payload.lat || 0,
-    lng: payload.lng || 0,
-    photo: payload.photo || "",
-    faceDescriptor: localVerified.descriptor || [],
-    faceVerified: true
-  };
-  try {
-    const gasResult = await callAPI("checkin", gasPayload);
-    if (!gasResult.success && isGASFaceError(gasResult.message || "")) {
-      console.warn("[checkIn] GAS face error, fallback to local:", gasResult.message);
-      if (localVerified.skipLocalVerify) {
-        return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
-      }
-      throw new Error("fallback");
-    }
-    return gasResult;
-  } catch (err) {
-    if (localVerified.skipLocalVerify && err?.message !== "fallback") {
-      return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
-    }
-    await delay(400);
-    const session = requireAuth();
-    const healedSession = autoHealSessionEmployeeId(session);
-    const today2 = todayStr();
-    const list = db.getAttendances();
-    const existing = list.find((a2) => a2.employeeId === (healedSession.employeeId || "") && a2.date === today2);
-    if (existing?.checkIn) return fail("Anda sudah check-in hari ini");
-    const employee = findEmployeeForSession(healedSession);
-    const employeeIdForAtt = employee?.id || healedSession.employeeId || "";
-    if (!employeeIdForAtt) {
-      return fail("Akun tidak terhubung ke data karyawan");
-    }
-    if (!isFaceEnrolled(employee)) {
-      return fail(
-        "Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID."
-      );
-    }
-    if (payload.photo && !payload.faceVerified) {
-      const faceRes = await verifyAttendanceFace(payload.photo);
-      if (!faceRes.success || !faceRes.data?.match) {
-        return fail(
-          faceRes.message || "Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar."
-        );
-      }
-    }
-    if (payload.lat != null && payload.lng != null) {
-      const settings22 = db.getSettings();
-      const dist = haversineDistance(payload.lat, payload.lng, settings22.officeLat, settings22.officeLng);
-      if (dist > settings22.officeRadiusMeters) {
-        return fail(
-          `Anda berada ${Math.round(dist)}m dari kantor. Check-in hanya dalam radius ${settings22.officeRadiusMeters}m.`
-        );
-      }
-    }
-    const now = /* @__PURE__ */ new Date();
-    const checkInTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
-    const settings2 = db.getSettings();
-    const [startH, startM] = settings2.workStartTime.split(":").map(Number);
-    const lateMinutes = Math.max(0, now.getHours() * 60 + now.getMinutes() - (startH * 60 + startM) - settings2.lateToleranceMinutes);
-    const att = {
-      id: generateId("att"),
-      employeeId: employeeIdForAtt,
-      date: today2,
-      checkIn: checkInTime,
-      checkInLat: payload.lat,
-      checkInLng: payload.lng,
-      checkInPhoto: payload.photo,
-      status: lateMinutes > 0 ? "Late" : "Present",
-      lateMinutes,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  if (!payload.faceDescriptor || payload.faceDescriptor.length === 0) {
+    return {
+      success: false,
+      code: "INVALID_DESCRIPTOR",
+      message: "Foto wajah diperlukan untuk check-in. Ambil foto terlebih dahulu."
     };
-    list.push(att);
-    db.setAttendances(list);
-    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: "CHECK_IN", module: "Attendance", details: `Check-in at ${checkInTime}` });
-    return ok(att, "Check-in berhasil");
+  }
+  try {
+    return await callAPI("checkin", {
+      lat: payload.lat || 0,
+      lng: payload.lng || 0,
+      photo: payload.photo || "",
+      faceDescriptor: payload.faceDescriptor,
+      // Tidak ada lagi faceVerified=true â€” server selalu verifikasi sendiri.
+      faceVerified: false
+    });
+  } catch (err) {
+    console.error("[checkIn] GAS error:", err);
+    return {
+      success: false,
+      code: "NETWORK_ERROR",
+      message: "Tidak dapat menghubungi server untuk check-in. Periksa koneksi internet Anda lalu coba lagi. Data absensi TIDAK disimpan ganda."
+    };
   }
 }
 async function checkOut(payload) {
-  const localVerified = await resolveLocalFaceVerification(payload);
-  if (!localVerified.success) return localVerified;
-  const gasPayload = localVerified.skipLocalVerify ? {
-    lat: payload.lat || 0,
-    lng: payload.lng || 0,
-    photo: payload.photo || "",
-    faceDescriptor: localVerified.descriptor || [],
-    faceVerified: false
-  } : {
-    lat: payload.lat || 0,
-    lng: payload.lng || 0,
-    photo: payload.photo || "",
-    faceDescriptor: localVerified.descriptor || [],
-    faceVerified: true
-  };
-  try {
-    const gasResult = await callAPI("checkout", gasPayload);
-    if (!gasResult.success && isGASFaceError(gasResult.message || "")) {
-      console.warn("[checkOut] GAS face error, fallback to local:", gasResult.message);
-      if (localVerified.skipLocalVerify) {
-        return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
-      }
-      throw new Error("fallback");
-    }
-    return gasResult;
-  } catch (err) {
-    if (localVerified.skipLocalVerify && err?.message !== "fallback") {
-      return fail("Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID.");
-    }
-    await delay(400);
-    const session = requireAuth();
-    const healedSession = autoHealSessionEmployeeId(session);
-    const today2 = todayStr();
-    const list = db.getAttendances();
-    const employee = findEmployeeForSession(healedSession);
-    const employeeIdForAtt = employee?.id || healedSession.employeeId || "";
-    if (!employeeIdForAtt) {
-      return fail("Akun tidak terhubung ke data karyawan");
-    }
-    const idx = list.findIndex((a2) => a2.employeeId === employeeIdForAtt && a2.date === today2);
-    if (idx < 0 || !list[idx].checkIn) return fail("Anda belum check-in hari ini");
-    if (list[idx].checkOut) return fail("Anda sudah check-out hari ini");
-    if (!isFaceEnrolled(employee)) {
-      return fail(
-        "Wajah Anda belum terdaftar. Silakan daftarkan wajah terlebih dahulu di menu Face ID."
-      );
-    }
-    const faceVerifiedByClient2 = payload.faceVerified === true;
-    if (payload.photo && !faceVerifiedByClient2) {
-      const faceRes = await verifyAttendanceFace(payload.photo);
-      if (!faceRes.success || !faceRes.data?.match) {
-        return fail(
-          faceRes.message || "Verifikasi wajah gagal. Wajah tidak cocok dengan data terdaftar."
-        );
-      }
-    }
-    if (payload.lat != null && payload.lng != null) {
-      const settings2 = db.getSettings();
-      const dist = haversineDistance(payload.lat, payload.lng, settings2.officeLat, settings2.officeLng);
-      if (dist > settings2.officeRadiusMeters) {
-        return fail(
-          `Anda berada ${Math.round(dist)}m dari kantor. Check-out hanya dalam radius ${settings2.officeRadiusMeters}m.`
-        );
-      }
-    }
-    const now = /* @__PURE__ */ new Date();
-    const checkOutTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
-    const [inH, inM] = list[idx].checkIn.split(":").map(Number);
-    const workHours = +(now.getHours() + now.getMinutes() / 60 - (inH + inM / 60)).toFixed(2);
-    list[idx] = {
-      ...list[idx],
-      checkOut: checkOutTime,
-      checkOutLat: payload.lat,
-      checkOutLng: payload.lng,
-      checkOutPhoto: payload.photo,
-      workHours
+  if (!payload.faceDescriptor || payload.faceDescriptor.length === 0) {
+    return {
+      success: false,
+      code: "INVALID_DESCRIPTOR",
+      message: "Foto wajah diperlukan untuk check-out. Ambil foto terlebih dahulu."
     };
-    db.setAttendances(list);
-    db.addLog({ userId: healedSession.userId, userName: healedSession.name, action: "CHECK_OUT", module: "Attendance", details: `Work hours: ${workHours}h` });
-    return ok(list[idx], "Check-out berhasil");
+  }
+  try {
+    return await callAPI("checkout", {
+      lat: payload.lat || 0,
+      lng: payload.lng || 0,
+      photo: payload.photo || "",
+      faceDescriptor: payload.faceDescriptor,
+      faceVerified: false
+    });
+  } catch (err) {
+    console.error("[checkOut] GAS error:", err);
+    return {
+      success: false,
+      code: "NETWORK_ERROR",
+      message: "Tidak dapat menghubungi server untuk check-out. Periksa koneksi internet Anda lalu coba lagi."
+    };
   }
 }
 async function getLeaves(filters) {
@@ -22381,85 +22129,6 @@ async function checkGASHealth() {
     return fail("GAS backend tidak tersedia");
   }
 }
-async function enrollFace(faceDescriptor) {
-  if (!faceDescriptor || faceDescriptor.length === 0) {
-    return fail("Data wajah tidak valid. Silakan ambil foto ulang.");
-  }
-  const session = requireAuth();
-  const healedSession = autoHealSessionEmployeeId(session);
-  const employee = findEmployeeForSession(healedSession);
-  if (employee) {
-    const employees2 = db.getEmployees();
-    const idx = employees2.findIndex((e) => e.id === employee.id);
-    if (idx >= 0) {
-      const descriptorJSON = JSON.stringify(faceDescriptor);
-      employees2[idx].faceDescriptor = descriptorJSON;
-      employees2[idx].faceRegistered = true;
-      db.setEmployees(employees2);
-      db.addLog({
-        userId: healedSession.userId,
-        userName: healedSession.name,
-        action: "ENROLL_FACE",
-        module: "Face Recognition",
-        details: `Face enrolled locally for ${employees2[idx].fullName}`
-      });
-    }
-  }
-  try {
-    return await callAPI("enrollFace", { faceDescriptor });
-  } catch {
-    await delay();
-    return ok({ descriptorLength: faceDescriptor.length }, "Wajah berhasil didaftarkan");
-  }
-}
-async function verifyAttendanceFace(photo) {
-  await delay();
-  const session = requireAuth();
-  const employee = findEmployeeForSession(session);
-  if (!employee) {
-    return fail("Akun tidak terhubung ke data karyawan");
-  }
-  if (!isFaceEnrolled(employee)) {
-    return fail("Wajah belum terdaftar. Silakan daftarkan wajah Anda terlebih dahulu di menu Face ID.");
-  }
-  let enrolledDescriptor;
-  try {
-    enrolledDescriptor = JSON.parse(employee.faceDescriptor);
-  } catch {
-    return fail("Data wajah rusak. Silakan daftarkan ulang wajah Anda di menu Face ID.");
-  }
-  if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
-    return fail("Data wajah tidak valid. Silakan daftarkan ulang.");
-  }
-  const result = await verifyFaceFromBase64(photo, enrolledDescriptor);
-  const faceResult = {
-    match: result.matched,
-    similarity: result.similarity
-  };
-  return ok(faceResult, result.message);
-}
-async function getFaceEnrollmentStatus() {
-  await delay(100);
-  const session = requireAuth();
-  const healedSession = autoHealSessionEmployeeId(session);
-  const employee = findEmployeeForSession(healedSession);
-  if (!employee) return fail("Karyawan tidak ditemukan");
-  const enrolled = isFaceEnrolled(employee);
-  if (!enrolled && employee.faceRegistered) {
-    console.warn(`Auto-healing: ${employee.fullName} had faceRegistered=true but empty descriptor - resetting`);
-    const employees2 = db.getEmployees();
-    const idx = employees2.findIndex((e) => e.id === employee.id);
-    if (idx >= 0) {
-      employees2[idx].faceRegistered = false;
-      employees2[idx].faceDescriptor = "";
-      db.setEmployees(employees2);
-    }
-  }
-  return ok({
-    enrolled,
-    employeeName: employee.fullName
-  });
-}
 async function uploadPayslip(base64, filename, employeeId, period) {
   try {
     return await callAPI("uploadPayslip", { base64, filename, employeeId, period });
@@ -22484,13 +22153,11 @@ function AuthProvider({ children }) {
     return { success: res.success, message: res.message };
   }, []);
   reactExports.useEffect(() => {
-    if (session?.employeeId) {
-      const employee = db.getEmployeeById(session.employeeId);
-      if (!employee && session.email) {
-        const empByEmail = db.getEmployees().find((e) => e.email.toLowerCase() === session.email.toLowerCase());
-        if (empByEmail) {
-          console.log(`[AuthContext] Session employeeId mismatch: "${session.employeeId}" vs "${empByEmail.id}"`);
-        }
+    if (session) {
+      const healed = autoHealSessionEmployeeId(session);
+      if (healed.employeeId !== session.employeeId) {
+        console.log("[AuthContext] Session healed, updating context");
+        setSession(healed);
       }
     }
   }, [session]);
@@ -22636,24 +22303,24 @@ const createLucideIcon = (iconName, iconNode) => {
   Component.displayName = toPascalCase(iconName);
   return Component;
 };
-const __iconNode$15 = [
+const __iconNode$16 = [
   ["path", { d: "M12 5v14", key: "s699le" }],
   ["path", { d: "m19 12-7 7-7-7", key: "1idqje" }]
 ];
-const ArrowDown = createLucideIcon("arrow-down", __iconNode$15);
-const __iconNode$14 = [
+const ArrowDown = createLucideIcon("arrow-down", __iconNode$16);
+const __iconNode$15 = [
   ["path", { d: "m21 16-4 4-4-4", key: "f6ql7i" }],
   ["path", { d: "M17 20V4", key: "1ejh1v" }],
   ["path", { d: "m3 8 4-4 4 4", key: "11wl7u" }],
   ["path", { d: "M7 4v16", key: "1glfcx" }]
 ];
-const ArrowUpDown = createLucideIcon("arrow-up-down", __iconNode$14);
-const __iconNode$13 = [
+const ArrowUpDown = createLucideIcon("arrow-up-down", __iconNode$15);
+const __iconNode$14 = [
   ["path", { d: "m5 12 7-7 7 7", key: "hav0vg" }],
   ["path", { d: "M12 19V5", key: "x0mq9r" }]
 ];
-const ArrowUp = createLucideIcon("arrow-up", __iconNode$13);
-const __iconNode$12 = [
+const ArrowUp = createLucideIcon("arrow-up", __iconNode$14);
+const __iconNode$13 = [
   ["path", { d: "M10.268 21a2 2 0 0 0 3.464 0", key: "vwvbt9" }],
   [
     "path",
@@ -22663,13 +22330,13 @@ const __iconNode$12 = [
     }
   ]
 ];
-const Bell = createLucideIcon("bell", __iconNode$12);
-const __iconNode$11 = [
+const Bell = createLucideIcon("bell", __iconNode$13);
+const __iconNode$12 = [
   ["path", { d: "M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16", key: "jecpp" }],
   ["rect", { width: "20", height: "14", x: "2", y: "6", rx: "2", key: "i6l2r4" }]
 ];
-const Briefcase = createLucideIcon("briefcase", __iconNode$11);
-const __iconNode$10 = [
+const Briefcase = createLucideIcon("briefcase", __iconNode$12);
+const __iconNode$11 = [
   ["path", { d: "M10 12h4", key: "a56b0p" }],
   ["path", { d: "M10 8h4", key: "1sr2af" }],
   ["path", { d: "M14 21v-3a2 2 0 0 0-4 0v3", key: "1rgiei" }],
@@ -22682,8 +22349,8 @@ const __iconNode$10 = [
   ],
   ["path", { d: "M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16", key: "16ra0t" }]
 ];
-const Building2 = createLucideIcon("building-2", __iconNode$10);
-const __iconNode$$ = [
+const Building2 = createLucideIcon("building-2", __iconNode$11);
+const __iconNode$10 = [
   ["path", { d: "M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8", key: "1w3rig" }],
   ["path", { d: "M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1", key: "n2jgmb" }],
   ["path", { d: "M2 21h20", key: "1nyx9w" }],
@@ -22694,16 +22361,16 @@ const __iconNode$$ = [
   ["path", { d: "M12 4h.01", key: "1ujb9j" }],
   ["path", { d: "M17 4h.01", key: "1upcoc" }]
 ];
-const Cake = createLucideIcon("cake", __iconNode$$);
-const __iconNode$_ = [
+const Cake = createLucideIcon("cake", __iconNode$10);
+const __iconNode$$ = [
   ["path", { d: "M8 2v4", key: "1cmpym" }],
   ["path", { d: "M16 2v4", key: "4m81vk" }],
   ["rect", { width: "18", height: "18", x: "3", y: "4", rx: "2", key: "1hopcy" }],
   ["path", { d: "M3 10h18", key: "8toen8" }],
   ["path", { d: "m9 16 2 2 4-4", key: "19s6y9" }]
 ];
-const CalendarCheck = createLucideIcon("calendar-check", __iconNode$_);
-const __iconNode$Z = [
+const CalendarCheck = createLucideIcon("calendar-check", __iconNode$$);
+const __iconNode$_ = [
   ["path", { d: "M16 14v2.2l1.6 1", key: "fo4ql5" }],
   ["path", { d: "M16 2v4", key: "4m81vk" }],
   ["path", { d: "M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5", key: "1osxxc" }],
@@ -22711,8 +22378,8 @@ const __iconNode$Z = [
   ["path", { d: "M8 2v4", key: "1cmpym" }],
   ["circle", { cx: "16", cy: "16", r: "6", key: "qoo3c4" }]
 ];
-const CalendarClock = createLucideIcon("calendar-clock", __iconNode$Z);
-const __iconNode$Y = [
+const CalendarClock = createLucideIcon("calendar-clock", __iconNode$_);
+const __iconNode$Z = [
   ["path", { d: "M4.2 4.2A2 2 0 0 0 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 1.82-1.18", key: "16swn3" }],
   ["path", { d: "M21 15.5V6a2 2 0 0 0-2-2H9.5", key: "yhw86o" }],
   ["path", { d: "M16 2v4", key: "4m81vk" }],
@@ -22720,8 +22387,8 @@ const __iconNode$Y = [
   ["path", { d: "M21 10h-5.5", key: "quycpq" }],
   ["path", { d: "m2 2 20 20", key: "1ooewy" }]
 ];
-const CalendarOff = createLucideIcon("calendar-off", __iconNode$Y);
-const __iconNode$X = [
+const CalendarOff = createLucideIcon("calendar-off", __iconNode$Z);
+const __iconNode$Y = [
   [
     "path",
     {
@@ -22731,61 +22398,61 @@ const __iconNode$X = [
   ],
   ["circle", { cx: "12", cy: "13", r: "3", key: "1vg3eu" }]
 ];
-const Camera = createLucideIcon("camera", __iconNode$X);
-const __iconNode$W = [
+const Camera = createLucideIcon("camera", __iconNode$Y);
+const __iconNode$X = [
   ["path", { d: "M3 3v16a2 2 0 0 0 2 2h16", key: "c24i48" }],
   ["path", { d: "M18 17V9", key: "2bz60n" }],
   ["path", { d: "M13 17V5", key: "1frdt8" }],
   ["path", { d: "M8 17v-3", key: "17ska0" }]
 ];
-const ChartColumn = createLucideIcon("chart-column", __iconNode$W);
-const __iconNode$V = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
-const Check = createLucideIcon("check", __iconNode$V);
-const __iconNode$U = [["path", { d: "m15 18-6-6 6-6", key: "1wnfg3" }]];
-const ChevronLeft = createLucideIcon("chevron-left", __iconNode$U);
-const __iconNode$T = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
-const ChevronDown = createLucideIcon("chevron-down", __iconNode$T);
-const __iconNode$S = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
-const ChevronRight = createLucideIcon("chevron-right", __iconNode$S);
-const __iconNode$R = [
+const ChartColumn = createLucideIcon("chart-column", __iconNode$X);
+const __iconNode$W = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
+const Check = createLucideIcon("check", __iconNode$W);
+const __iconNode$V = [["path", { d: "m15 18-6-6 6-6", key: "1wnfg3" }]];
+const ChevronLeft = createLucideIcon("chevron-left", __iconNode$V);
+const __iconNode$U = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
+const ChevronDown = createLucideIcon("chevron-down", __iconNode$U);
+const __iconNode$T = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
+const ChevronRight = createLucideIcon("chevron-right", __iconNode$T);
+const __iconNode$S = [
   ["path", { d: "m11 17-5-5 5-5", key: "13zhaf" }],
   ["path", { d: "m18 17-5-5 5-5", key: "h8a8et" }]
 ];
-const ChevronsLeft = createLucideIcon("chevrons-left", __iconNode$R);
-const __iconNode$Q = [
+const ChevronsLeft = createLucideIcon("chevrons-left", __iconNode$S);
+const __iconNode$R = [
   ["path", { d: "m6 17 5-5-5-5", key: "xnjwq" }],
   ["path", { d: "m13 17 5-5-5-5", key: "17xmmf" }]
 ];
-const ChevronsRight = createLucideIcon("chevrons-right", __iconNode$Q);
-const __iconNode$P = [
+const ChevronsRight = createLucideIcon("chevrons-right", __iconNode$R);
+const __iconNode$Q = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
   ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
 ];
-const CircleAlert = createLucideIcon("circle-alert", __iconNode$P);
-const __iconNode$O = [
+const CircleAlert = createLucideIcon("circle-alert", __iconNode$Q);
+const __iconNode$P = [
   ["path", { d: "M21.801 10A10 10 0 1 1 17 3.335", key: "yps3ct" }],
   ["path", { d: "m9 11 3 3L22 4", key: "1pflzl" }]
 ];
-const CircleCheckBig = createLucideIcon("circle-check-big", __iconNode$O);
-const __iconNode$N = [
+const CircleCheckBig = createLucideIcon("circle-check-big", __iconNode$P);
+const __iconNode$O = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
 ];
-const CircleCheck = createLucideIcon("circle-check", __iconNode$N);
-const __iconNode$M = [
+const CircleCheck = createLucideIcon("circle-check", __iconNode$O);
+const __iconNode$N = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["circle", { cx: "12", cy: "10", r: "3", key: "ilqhr7" }],
   ["path", { d: "M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662", key: "154egf" }]
 ];
-const CircleUser = createLucideIcon("circle-user", __iconNode$M);
-const __iconNode$L = [
+const CircleUser = createLucideIcon("circle-user", __iconNode$N);
+const __iconNode$M = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "m15 9-6 6", key: "1uzhvr" }],
   ["path", { d: "m9 9 6 6", key: "z0biqf" }]
 ];
-const CircleX = createLucideIcon("circle-x", __iconNode$L);
-const __iconNode$K = [
+const CircleX = createLucideIcon("circle-x", __iconNode$M);
+const __iconNode$L = [
   ["rect", { width: "8", height: "4", x: "8", y: "2", rx: "1", ry: "1", key: "tgr4d6" }],
   [
     "path",
@@ -22799,19 +22466,19 @@ const __iconNode$K = [
   ["path", { d: "M8 11h.01", key: "1dfujw" }],
   ["path", { d: "M8 16h.01", key: "18s6g9" }]
 ];
-const ClipboardList = createLucideIcon("clipboard-list", __iconNode$K);
-const __iconNode$J = [
+const ClipboardList = createLucideIcon("clipboard-list", __iconNode$L);
+const __iconNode$K = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M12 6v6l4 2", key: "mmk7yg" }]
 ];
-const Clock = createLucideIcon("clock", __iconNode$J);
-const __iconNode$I = [
+const Clock = createLucideIcon("clock", __iconNode$K);
+const __iconNode$J = [
   ["path", { d: "M12 15V3", key: "m9g1x1" }],
   ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", key: "ih7n3h" }],
   ["path", { d: "m7 10 5 5 5-5", key: "brsn70" }]
 ];
-const Download = createLucideIcon("download", __iconNode$I);
-const __iconNode$H = [
+const Download = createLucideIcon("download", __iconNode$J);
+const __iconNode$I = [
   [
     "path",
     {
@@ -22829,8 +22496,8 @@ const __iconNode$H = [
   ],
   ["path", { d: "m2 2 20 20", key: "1ooewy" }]
 ];
-const EyeOff = createLucideIcon("eye-off", __iconNode$H);
-const __iconNode$G = [
+const EyeOff = createLucideIcon("eye-off", __iconNode$I);
+const __iconNode$H = [
   [
     "path",
     {
@@ -22840,8 +22507,8 @@ const __iconNode$G = [
   ],
   ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
 ];
-const Eye = createLucideIcon("eye", __iconNode$G);
-const __iconNode$F = [
+const Eye = createLucideIcon("eye", __iconNode$H);
+const __iconNode$G = [
   [
     "path",
     {
@@ -22854,14 +22521,14 @@ const __iconNode$F = [
   ["path", { d: "M16 13H8", key: "t4e002" }],
   ["path", { d: "M16 17H8", key: "z1uh3a" }]
 ];
-const FileText = createLucideIcon("file-text", __iconNode$F);
-const __iconNode$E = [
+const FileText = createLucideIcon("file-text", __iconNode$G);
+const __iconNode$F = [
   ["path", { d: "M15 6a9 9 0 0 0-9 9V3", key: "1cii5b" }],
   ["circle", { cx: "18", cy: "6", r: "3", key: "1h7g24" }],
   ["circle", { cx: "6", cy: "18", r: "3", key: "fqmcym" }]
 ];
-const GitBranch = createLucideIcon("git-branch", __iconNode$E);
-const __iconNode$D = [
+const GitBranch = createLucideIcon("git-branch", __iconNode$F);
+const __iconNode$E = [
   ["path", { d: "M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8", key: "5wwlr5" }],
   [
     "path",
@@ -22871,51 +22538,51 @@ const __iconNode$D = [
     }
   ]
 ];
-const House = createLucideIcon("house", __iconNode$D);
-const __iconNode$C = [
+const House = createLucideIcon("house", __iconNode$E);
+const __iconNode$D = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M12 16v-4", key: "1dtifu" }],
   ["path", { d: "M12 8h.01", key: "e9boi3" }]
 ];
-const Info = createLucideIcon("info", __iconNode$C);
-const __iconNode$B = [
+const Info = createLucideIcon("info", __iconNode$D);
+const __iconNode$C = [
   ["path", { d: "m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4", key: "g0fldk" }],
   ["path", { d: "m21 2-9.6 9.6", key: "1j0ho8" }],
   ["circle", { cx: "7.5", cy: "15.5", r: "5.5", key: "yqb3hr" }]
 ];
-const Key = createLucideIcon("key", __iconNode$B);
-const __iconNode$A = [
+const Key = createLucideIcon("key", __iconNode$C);
+const __iconNode$B = [
   ["rect", { width: "7", height: "9", x: "3", y: "3", rx: "1", key: "10lvy0" }],
   ["rect", { width: "7", height: "5", x: "14", y: "3", rx: "1", key: "16une8" }],
   ["rect", { width: "7", height: "9", x: "14", y: "12", rx: "1", key: "1hutg5" }],
   ["rect", { width: "7", height: "5", x: "3", y: "16", rx: "1", key: "ldoo1y" }]
 ];
-const LayoutDashboard = createLucideIcon("layout-dashboard", __iconNode$A);
-const __iconNode$z = [["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]];
-const LoaderCircle = createLucideIcon("loader-circle", __iconNode$z);
-const __iconNode$y = [
+const LayoutDashboard = createLucideIcon("layout-dashboard", __iconNode$B);
+const __iconNode$A = [["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]];
+const LoaderCircle = createLucideIcon("loader-circle", __iconNode$A);
+const __iconNode$z = [
   ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2", ry: "2", key: "1w4ew1" }],
   ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4", key: "fwvmzm" }]
 ];
-const Lock = createLucideIcon("lock", __iconNode$y);
-const __iconNode$x = [
+const Lock = createLucideIcon("lock", __iconNode$z);
+const __iconNode$y = [
   ["path", { d: "m10 17 5-5-5-5", key: "1bsop3" }],
   ["path", { d: "M15 12H3", key: "6jk70r" }],
   ["path", { d: "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4", key: "u53s6r" }]
 ];
-const LogIn = createLucideIcon("log-in", __iconNode$x);
-const __iconNode$w = [
+const LogIn = createLucideIcon("log-in", __iconNode$y);
+const __iconNode$x = [
   ["path", { d: "m16 17 5-5-5-5", key: "1bji2h" }],
   ["path", { d: "M21 12H9", key: "dn1m92" }],
   ["path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", key: "1uf3rs" }]
 ];
-const LogOut = createLucideIcon("log-out", __iconNode$w);
-const __iconNode$v = [
+const LogOut = createLucideIcon("log-out", __iconNode$x);
+const __iconNode$w = [
   ["path", { d: "m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7", key: "132q7q" }],
   ["rect", { x: "2", y: "4", width: "20", height: "16", rx: "2", key: "izxlao" }]
 ];
-const Mail = createLucideIcon("mail", __iconNode$v);
-const __iconNode$u = [
+const Mail = createLucideIcon("mail", __iconNode$w);
+const __iconNode$v = [
   [
     "path",
     {
@@ -22925,8 +22592,8 @@ const __iconNode$u = [
   ],
   ["circle", { cx: "12", cy: "10", r: "3", key: "ilqhr7" }]
 ];
-const MapPin = createLucideIcon("map-pin", __iconNode$u);
-const __iconNode$t = [
+const MapPin = createLucideIcon("map-pin", __iconNode$v);
+const __iconNode$u = [
   [
     "path",
     {
@@ -22937,14 +22604,14 @@ const __iconNode$t = [
   ["path", { d: "M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14", key: "1853fq" }],
   ["path", { d: "M8 6v8", key: "15ugcq" }]
 ];
-const Megaphone = createLucideIcon("megaphone", __iconNode$t);
-const __iconNode$s = [
+const Megaphone = createLucideIcon("megaphone", __iconNode$u);
+const __iconNode$t = [
   ["path", { d: "M4 5h16", key: "1tepv9" }],
   ["path", { d: "M4 12h16", key: "1lakjw" }],
   ["path", { d: "M4 19h16", key: "1djgab" }]
 ];
-const Menu = createLucideIcon("menu", __iconNode$s);
-const __iconNode$r = [
+const Menu = createLucideIcon("menu", __iconNode$t);
+const __iconNode$s = [
   [
     "path",
     {
@@ -22953,12 +22620,12 @@ const __iconNode$r = [
     }
   ]
 ];
-const Moon = createLucideIcon("moon", __iconNode$r);
-const __iconNode$q = [
+const Moon = createLucideIcon("moon", __iconNode$s);
+const __iconNode$r = [
   ["polygon", { points: "3 11 22 2 13 21 11 13 3 11", key: "1ltx0t" }]
 ];
-const Navigation = createLucideIcon("navigation", __iconNode$q);
-const __iconNode$p = [
+const Navigation = createLucideIcon("navigation", __iconNode$r);
+const __iconNode$q = [
   [
     "path",
     {
@@ -22971,8 +22638,8 @@ const __iconNode$p = [
   ["circle", { cx: "6.5", cy: "12.5", r: ".5", fill: "currentColor", key: "qy21gx" }],
   ["circle", { cx: "8.5", cy: "7.5", r: ".5", fill: "currentColor", key: "fotxhn" }]
 ];
-const Palette = createLucideIcon("palette", __iconNode$p);
-const __iconNode$o = [
+const Palette = createLucideIcon("palette", __iconNode$q);
+const __iconNode$p = [
   [
     "path",
     {
@@ -22982,8 +22649,8 @@ const __iconNode$o = [
   ],
   ["path", { d: "m15 5 4 4", key: "1mk7zo" }]
 ];
-const Pencil = createLucideIcon("pencil", __iconNode$o);
-const __iconNode$n = [
+const Pencil = createLucideIcon("pencil", __iconNode$p);
+const __iconNode$o = [
   [
     "path",
     {
@@ -22992,25 +22659,25 @@ const __iconNode$n = [
     }
   ]
 ];
-const Play = createLucideIcon("play", __iconNode$n);
-const __iconNode$m = [
+const Play = createLucideIcon("play", __iconNode$o);
+const __iconNode$n = [
   ["path", { d: "M5 12h14", key: "1ays0h" }],
   ["path", { d: "M12 5v14", key: "s699le" }]
 ];
-const Plus = createLucideIcon("plus", __iconNode$m);
-const __iconNode$l = [
+const Plus = createLucideIcon("plus", __iconNode$n);
+const __iconNode$m = [
   ["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8", key: "v9h5vc" }],
   ["path", { d: "M21 3v5h-5", key: "1q7to0" }],
   ["path", { d: "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16", key: "3uifl3" }],
   ["path", { d: "M8 16H3v5", key: "1cv678" }]
 ];
-const RefreshCw = createLucideIcon("refresh-cw", __iconNode$l);
-const __iconNode$k = [
+const RefreshCw = createLucideIcon("refresh-cw", __iconNode$m);
+const __iconNode$l = [
   ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", key: "1357e3" }],
   ["path", { d: "M3 3v5h5", key: "1xhq8a" }]
 ];
-const RotateCcw = createLucideIcon("rotate-ccw", __iconNode$k);
-const __iconNode$j = [
+const RotateCcw = createLucideIcon("rotate-ccw", __iconNode$l);
+const __iconNode$k = [
   [
     "path",
     {
@@ -23021,27 +22688,27 @@ const __iconNode$j = [
   ["path", { d: "M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7", key: "1ydtos" }],
   ["path", { d: "M7 3v4a1 1 0 0 0 1 1h7", key: "t51u73" }]
 ];
-const Save = createLucideIcon("save", __iconNode$j);
-const __iconNode$i = [
+const Save = createLucideIcon("save", __iconNode$k);
+const __iconNode$j = [
   ["path", { d: "M3 7V5a2 2 0 0 1 2-2h2", key: "aa7l1z" }],
   ["path", { d: "M17 3h2a2 2 0 0 1 2 2v2", key: "4qcy5o" }],
   ["path", { d: "M21 17v2a2 2 0 0 1-2 2h-2", key: "6vwrx8" }],
   ["path", { d: "M7 21H5a2 2 0 0 1-2-2v-2", key: "ioqczr" }]
 ];
-const Scan = createLucideIcon("scan", __iconNode$i);
-const __iconNode$h = [
+const Scan = createLucideIcon("scan", __iconNode$j);
+const __iconNode$i = [
   ["path", { d: "m21 21-4.34-4.34", key: "14j7rj" }],
   ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }]
 ];
-const Search = createLucideIcon("search", __iconNode$h);
-const __iconNode$g = [
+const Search = createLucideIcon("search", __iconNode$i);
+const __iconNode$h = [
   ["rect", { width: "20", height: "8", x: "2", y: "2", rx: "2", ry: "2", key: "ngkwjq" }],
   ["rect", { width: "20", height: "8", x: "2", y: "14", rx: "2", ry: "2", key: "iecqi9" }],
   ["line", { x1: "6", x2: "6.01", y1: "6", y2: "6", key: "16zg32" }],
   ["line", { x1: "6", x2: "6.01", y1: "18", y2: "18", key: "nzw8ys" }]
 ];
-const Server = createLucideIcon("server", __iconNode$g);
-const __iconNode$f = [
+const Server = createLucideIcon("server", __iconNode$h);
+const __iconNode$g = [
   [
     "path",
     {
@@ -23051,8 +22718,8 @@ const __iconNode$f = [
   ],
   ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
 ];
-const Settings = createLucideIcon("settings", __iconNode$f);
-const __iconNode$e = [
+const Settings = createLucideIcon("settings", __iconNode$g);
+const __iconNode$f = [
   [
     "path",
     {
@@ -23061,7 +22728,15 @@ const __iconNode$e = [
     }
   ]
 ];
-const Shield = createLucideIcon("shield", __iconNode$e);
+const Shield = createLucideIcon("shield", __iconNode$f);
+const __iconNode$e = [
+  ["path", { d: "M11 2v2", key: "1539x4" }],
+  ["path", { d: "M5 2v2", key: "1yf1q8" }],
+  ["path", { d: "M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1", key: "rb5t3r" }],
+  ["path", { d: "M8 15a6 6 0 0 0 12 0v-3", key: "x18d4x" }],
+  ["circle", { cx: "20", cy: "10", r: "2", key: "ts1r5v" }]
+];
+const Stethoscope = createLucideIcon("stethoscope", __iconNode$e);
 const __iconNode$d = [
   ["circle", { cx: "12", cy: "12", r: "4", key: "4exip2" }],
   ["path", { d: "M12 2v2", key: "tus03m" }],
@@ -38762,12 +38437,177 @@ function DashboardPage() {
     ] })
   ] });
 }
+function extractFaceDescriptor(canvas) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const width = 128;
+  const height = 128;
+  const tempCanvas = document.createElement("canvas");
+  tempCanvas.width = width;
+  tempCanvas.height = height;
+  const tempCtx = tempCanvas.getContext("2d");
+  if (!tempCtx) return null;
+  tempCtx.drawImage(canvas, 0, 0, width, height);
+  const imageData = tempCtx.getImageData(0, 0, width, height);
+  const pixels = imageData.data;
+  const descriptor = [];
+  let skinR = 0, skinG = 0, skinB = 0, skinCount = 0;
+  for (let i2 = 0; i2 < pixels.length; i2 += 4) {
+    const r2 = pixels[i2], g2 = pixels[i2 + 1], b2 = pixels[i2 + 2];
+    const isSkin = r2 > 70 && g2 > 35 && b2 > 18 && r2 > g2 && r2 > b2 && Math.abs(r2 - g2) > 10;
+    if (isSkin) {
+      skinR += r2;
+      skinG += g2;
+      skinB += b2;
+      skinCount++;
+    }
+  }
+  if (skinCount > 0) {
+    descriptor.push(skinR / skinCount / 255);
+    descriptor.push(skinG / skinCount / 255);
+    descriptor.push(skinB / skinCount / 255);
+    descriptor.push(skinCount / (width * height));
+  } else {
+    return null;
+  }
+  const gridSize = 8;
+  const cellW = Math.floor(width / gridSize);
+  const cellH = Math.floor(height / gridSize);
+  for (let gy = 0; gy < gridSize; gy++) {
+    for (let gx = 0; gx < gridSize; gx++) {
+      let sum = 0, count = 0;
+      for (let y2 = gy * cellH; y2 < (gy + 1) * cellH && y2 < height; y2++) {
+        for (let x2 = gx * cellW; x2 < (gx + 1) * cellW && x2 < width; x2++) {
+          const i2 = (y2 * width + x2) * 4;
+          sum += (pixels[i2] + pixels[i2 + 1] + pixels[i2 + 2]) / 3;
+          count++;
+        }
+      }
+      descriptor.push(sum / count / 255);
+    }
+  }
+  let edgeSum = 0;
+  for (let y2 = 1; y2 < height - 1; y2++) {
+    for (let x2 = 1; x2 < width - 1; x2++) {
+      const i2 = (y2 * width + x2) * 4;
+      const center = (pixels[i2] + pixels[i2 + 1] + pixels[i2 + 2]) / 3;
+      const left = (pixels[(y2 * width + (x2 - 1)) * 4] + pixels[(y2 * width + (x2 - 1)) * 4 + 1] + pixels[(y2 * width + (x2 - 1)) * 4 + 2]) / 3;
+      const right = (pixels[(y2 * width + (x2 + 1)) * 4] + pixels[(y2 * width + (x2 + 1)) * 4 + 1] + pixels[(y2 * width + (x2 + 1)) * 4 + 2]) / 3;
+      const top = (pixels[((y2 - 1) * width + x2) * 4] + pixels[((y2 - 1) * width + x2) * 4 + 1] + pixels[((y2 - 1) * width + x2) * 4 + 2]) / 3;
+      const bottom = (pixels[((y2 + 1) * width + x2) * 4] + pixels[((y2 + 1) * width + x2) * 4 + 1] + pixels[((y2 + 1) * width + x2) * 4 + 2]) / 3;
+      edgeSum += Math.abs(center - left) + Math.abs(center - right) + Math.abs(center - top) + Math.abs(center - bottom);
+    }
+  }
+  descriptor.push(edgeSum / (width * height) / 255);
+  let symmetryScore = 0;
+  const halfW = Math.floor(width / 2);
+  for (let y2 = 0; y2 < height; y2++) {
+    for (let x2 = 0; x2 < halfW; x2++) {
+      const leftI = (y2 * width + x2) * 4;
+      const rightI = (y2 * width + (width - 1 - x2)) * 4;
+      const diff = Math.abs(pixels[leftI] - pixels[rightI]) + Math.abs(pixels[leftI + 1] - pixels[rightI + 1]) + Math.abs(pixels[leftI + 2] - pixels[rightI + 2]);
+      symmetryScore += diff;
+    }
+  }
+  descriptor.push(1 - symmetryScore / (width * height * 3 * 255));
+  return descriptor;
+}
+function validateFace(canvas) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return {
+      detected: false,
+      faceCount: 0,
+      confidence: 0,
+      details: { hasFace: false, brightness: 0, hasEyes: false, hasMouth: false, isBlurry: false, facePosition: "unknown" },
+      message: "❌ Canvas tidak tersedia"
+    };
+  }
+  const width = canvas.width;
+  const height = canvas.height;
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const pixels = imageData.data;
+  let totalBrightness = 0;
+  let skinPixelCount = 0;
+  let skinCenterX = 0, skinCenterY = 0;
+  for (let y2 = 0; y2 < height; y2 += 4) {
+    for (let x2 = 0; x2 < width; x2 += 4) {
+      const i2 = (y2 * width + x2) * 4;
+      const r2 = pixels[i2], g2 = pixels[i2 + 1], b2 = pixels[i2 + 2];
+      const brightness = (r2 + g2 + b2) / 3;
+      totalBrightness += brightness;
+      const isSkin = r2 > 85 && g2 > 40 && b2 > 20 && r2 > g2 && r2 > b2 && Math.abs(r2 - g2) > 15;
+      if (isSkin) {
+        skinPixelCount++;
+        skinCenterX += x2;
+        skinCenterY += y2;
+      }
+    }
+  }
+  const avgBrightness = totalBrightness / (width * height / 16);
+  const totalPixels = width / 4 * (height / 4);
+  const skinRatio = skinPixelCount / totalPixels;
+  const faceCX = skinPixelCount > 0 ? skinCenterX / skinPixelCount : width / 2;
+  const faceCY = skinPixelCount > 0 ? skinCenterY / skinPixelCount : height / 2;
+  const faceCenterX = faceCX / width * 100;
+  const faceCenterY = faceCY / height * 100;
+  let blurScore = 0, sampleCount = 0;
+  for (let y2 = 2; y2 < height - 2; y2 += 8) {
+    for (let x2 = 2; x2 < width - 2; x2 += 8) {
+      const i2 = (y2 * width + x2) * 4;
+      const center = (pixels[i2] + pixels[i2 + 1] + pixels[i2 + 2]) / 3;
+      const left = (pixels[(y2 * width + (x2 - 2)) * 4] + pixels[(y2 * width + (x2 - 2)) * 4 + 1] + pixels[(y2 * width + (x2 - 2)) * 4 + 2]) / 3;
+      const right = (pixels[(y2 * width + (x2 + 2)) * 4] + pixels[(y2 * width + (x2 + 2)) * 4 + 1] + pixels[(y2 * width + (x2 + 2)) * 4 + 2]) / 3;
+      blurScore += Math.abs(center - left) + Math.abs(center - right);
+      sampleCount++;
+    }
+  }
+  const avgBlur = blurScore / sampleCount;
+  const isBlurry = avgBlur < 5;
+  let facePosition = "center";
+  if (faceCenterX < 30) facePosition = "left";
+  else if (faceCenterX > 70) facePosition = "right";
+  else if (faceCenterY < 30) facePosition = "top";
+  else if (faceCenterY > 70) facePosition = "bottom";
+  const hasFace = skinRatio > 0.05 && skinRatio < 0.5;
+  const hasEyes = hasFace && faceCenterY > 25 && faceCenterY < 65;
+  const hasMouth = hasFace && faceCenterY > 50 && faceCenterY < 80;
+  let confidence = 0;
+  if (hasFace) confidence += 40;
+  if (!isBlurry) confidence += 20;
+  if (avgBrightness > 15 && avgBrightness < 240) confidence += 15;
+  if (skinRatio > 0.06 && skinRatio < 0.4) confidence += 15;
+  if (facePosition === "center") confidence += 10;
+  let descriptor;
+  if (hasFace) {
+    const extracted = extractFaceDescriptor(canvas);
+    if (extracted) descriptor = extracted;
+  }
+  const messages2 = [];
+  if (hasFace && !isBlurry && avgBrightness > 20 && avgBrightness < 230) {
+    messages2.push("✅ Wajah terverifikasi");
+  } else {
+    if (!hasFace) messages2.push("❌ Wajah tidak terdeteksi");
+    if (isBlurry) messages2.push("📷 Foto blur");
+    if (avgBrightness < 20) messages2.push("🌑 Terlalu gelap");
+    if (avgBrightness > 230) messages2.push("☀️ Terlalu terang");
+    if (facePosition !== "center") messages2.push("🎯 Posisikan wajah di tengah");
+  }
+  return {
+    detected: hasFace && !isBlurry && confidence > 50,
+    faceCount: hasFace ? 1 : 0,
+    confidence: Math.min(100, confidence),
+    descriptor,
+    details: { hasFace, brightness: Math.round(avgBrightness), hasEyes, hasMouth, isBlurry, facePosition },
+    message: messages2.join(". ") || "❌ Wajah tidak valid"
+  };
+}
 function EmployeeDashboard() {
   const { session, logout: logout2 } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const [stats, setStats] = reactExports.useState(null);
-  const [loading, setLoading] = reactExports.useState(true);
+  const [, setLoading] = reactExports.useState(true);
   const [checking, setChecking] = reactExports.useState(false);
   const [showCamera, setShowCamera] = reactExports.useState(false);
   const [photo, setPhoto] = reactExports.useState(null);
@@ -38897,12 +38737,12 @@ function EmployeeDashboard() {
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-center gap-4 mt-2", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-center", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-white/60", children: "Check In" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold", children: formatTime(todayAtt?.checkIn) || "—" })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold", children: formatTime(todayAtt?.checkIn) || "â€”" })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "h-8 w-px bg-white/20" }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-center", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-white/60", children: "Check Out" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold", children: formatTime(todayAtt?.checkOut) || "—" })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold", children: formatTime(todayAtt?.checkOut) || "â€”" })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "h-8 w-px bg-white/20" }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-center", children: [
@@ -42906,7 +42746,7 @@ function EmployeePage() {
 }
 function AttendancePage() {
   const toast = useToast();
-  const { session, isHR, isManager } = useAuth();
+  const { session, isHR, isManager, refresh } = useAuth();
   const [attendances2, setAttendances2] = reactExports.useState([]);
   const [loading, setLoading] = reactExports.useState(true);
   const [checking, setChecking] = reactExports.useState(false);
@@ -42915,24 +42755,23 @@ function AttendancePage() {
   const [photo, setPhoto] = reactExports.useState(null);
   const [faceDescriptor, setFaceDescriptor] = reactExports.useState(null);
   const [faceValidation, setFaceValidation] = reactExports.useState(null);
-  const [faceVerified, setFaceVerified] = reactExports.useState(false);
+  const [faceResult, setFaceResult] = reactExports.useState(null);
+  const [faceStatusKnown, setFaceStatusKnown] = reactExports.useState(null);
+  const [verifyingFace, setVerifyingFace] = reactExports.useState(false);
   const [location2, setLocation] = reactExports.useState(null);
   const [locLoading, setLocLoading] = reactExports.useState(false);
   const [dateFrom, setDateFrom] = reactExports.useState("");
   const [dateTo, setDateTo] = reactExports.useState("");
   const videoRef = reactExports.useRef(null);
   const streamRef = reactExports.useRef(null);
-  const healedSession = session && session.employeeId ? (() => {
-    const employee = db.getEmployeeById(session.employeeId);
-    if (!employee && session.email) {
-      const empByEmail = db.getEmployees().find((e) => e.email.toLowerCase() === session.email.toLowerCase());
-      if (empByEmail && empByEmail.id !== session.employeeId) {
-        console.log(`[AttendancePage] Auto-heal: session.employeeId "${session.employeeId}" -> "${empByEmail.id}"`);
-        return { ...session, employeeId: empByEmail.id };
-      }
+  const isProcessingRef = reactExports.useRef(false);
+  const healedSession = session ? autoHealSessionEmployeeId(session) : session;
+  reactExports.useEffect(() => {
+    if (healedSession && session && healedSession.employeeId !== session.employeeId) {
+      console.log("[AttendancePage] Session healed, refreshing auth context");
+      refresh();
     }
-    return session;
-  })() : session;
+  }, [healedSession, session, refresh]);
   const todayAtt = attendances2.find(
     (a2) => a2.employeeId === healedSession?.employeeId && a2.date === todayStr()
   );
@@ -42968,9 +42807,24 @@ function AttendancePage() {
     setPhoto(null);
     setFaceDescriptor(null);
     setFaceValidation(null);
-    setFaceVerified(false);
+    setFaceResult(null);
+    setFaceStatusKnown(null);
     setCameraOpen(true);
     await getLocation();
+    try {
+      const status = await getFaceStatus();
+      if (status.code === "UNKNOWN_ACTION") {
+        toast.error(LEGACY_BACKEND_MESSAGE);
+        setFaceStatusKnown(false);
+      } else {
+        setFaceStatusKnown(status.enrolled);
+        if (!status.enrolled) {
+          toast.warning("Wajah Anda belum terdaftar. Buka menu Face ID untuk mendaftarkan terlebih dahulu.");
+        }
+      }
+    } catch {
+      setFaceStatusKnown(null);
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -42986,31 +42840,48 @@ function AttendancePage() {
         await videoRef.current.play();
       }
     } catch {
-      toast.warning("Kamera tidak tersedia. Anda dapat check-in tanpa foto.");
+      toast.warning("Kamera tidak tersedia. Izinkan akses kamera lalu coba lagi.");
     }
   };
-  const capturePhoto = () => {
-    if (!videoRef.current) return;
+  const capturePhoto = async () => {
+    if (!videoRef.current || isProcessingRef.current) return;
+    isProcessingRef.current = true;
     const video = videoRef.current;
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0);
-      const photoData = canvas.toDataURL("image/jpeg", 0.92);
-      setPhoto(photoData);
-      const validation = validateFace(canvas);
-      setFaceValidation(validation);
-      if (validation.detected && validation.descriptor) {
-        setFaceDescriptor(validation.descriptor);
-        setFaceVerified(true);
-        toast.success("Wajah terdeteksi!");
+    if (!ctx) {
+      isProcessingRef.current = false;
+      return;
+    }
+    ctx.drawImage(videoRef.current, 0, 0);
+    const photoData = canvas.toDataURL("image/jpeg", 0.92);
+    setPhoto(photoData);
+    setFaceResult(null);
+    const validation = validateFace(canvas);
+    setFaceValidation(validation);
+    if (!validation.detected || !validation.descriptor) {
+      setFaceDescriptor(null);
+      setFaceResult(null);
+      toast.warning(validation.message || "Wajah tidak terdeteksi dengan baik. Silakan coba lagi.");
+      isProcessingRef.current = false;
+      return;
+    }
+    setFaceDescriptor(validation.descriptor);
+    setVerifyingFace(true);
+    try {
+      const result = await verifyLiveFace(validation.descriptor);
+      setFaceResult(result);
+      console.log(`[FACE DEBUG] attendance verify | code=${result.code} | template=${result.faceTemplateId ?? "-"} | sim=${result.similarityPercent ?? "-"}% | threshold=${result.threshold ?? "-"} | requestId=${result.requestId ?? "-"}`);
+      if (result.success && result.code === "VERIFIED") {
+        toast.success(`✅ Wajah terverifikasi (${result.similarityPercent}%)`);
       } else {
-        setFaceDescriptor(null);
-        setFaceVerified(false);
-        toast.warning(validation.message || "Wajah tidak terdeteksi dengan baik. Silakan coba lagi.");
+        toast.error(result.message);
       }
+    } finally {
+      setVerifyingFace(false);
+      isProcessingRef.current = false;
     }
   };
   const stopCamera = () => {
@@ -43020,25 +42891,48 @@ function AttendancePage() {
     setPhoto(null);
     setFaceDescriptor(null);
     setFaceValidation(null);
-    setFaceVerified(false);
+    setFaceResult(null);
+    setFaceStatusKnown(null);
+    isProcessingRef.current = false;
   };
   const submitCheck = async () => {
+    if (checking || isProcessingRef.current) return;
+    let loc = location2;
+    if (!loc) {
+      try {
+        const pos = await getCurrentPosition();
+        loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setLocation(loc);
+      } catch {
+        toast.error("Koordinat GPS diperlukan untuk absensi. Aktifkan lokasi lalu coba lagi.");
+        return;
+      }
+    }
+    if (!faceDescriptor || !faceResult || faceResult.code !== "VERIFIED") {
+      toast.error("Wajah belum terverifikasi. Ambil foto dan tunggu verifikasi berhasil dulu.");
+      return;
+    }
+    isProcessingRef.current = true;
     setChecking(true);
-    const payload = {
-      lat: location2?.lat,
-      lng: location2?.lng,
-      photo: photo || void 0,
-      faceDescriptor: faceDescriptor || void 0,
-      faceVerified: faceVerified || void 0
-    };
-    const res = checkType === "in" ? await checkIn(payload) : await checkOut(payload);
-    setChecking(false);
-    if (res.success) {
-      toast.success(res.message);
-      stopCamera();
-      load();
-    } else {
-      toast.error(res.message);
+    try {
+      const payload = {
+        lat: loc.lat,
+        lng: loc.lng,
+        photo: photo || void 0,
+        faceDescriptor
+      };
+      const res = checkType === "in" ? await checkIn(payload) : await checkOut(payload);
+      if (res.success) {
+        toast.success(res.message);
+        stopCamera();
+        load();
+      } else {
+        const code = res.code ? ` [${res.code}]` : "";
+        toast.error(`${res.message}${code}`);
+      }
+    } finally {
+      setChecking(false);
+      isProcessingRef.current = false;
     }
   };
   const handleExport = () => {
@@ -43190,7 +43084,7 @@ function AttendancePage() {
             {
               onClick: submitCheck,
               loading: checking,
-              disabled: !photo || !faceVerified,
+              disabled: !photo || verifyingFace || faceResult?.code !== "VERIFIED",
               children: checking ? "Memproses..." : checkType === "in" ? "Konfirmasi Check In" : "Konfirmasi Check Out"
             }
           )
@@ -43200,14 +43094,36 @@ function AttendancePage() {
             photo ? /* @__PURE__ */ jsxRuntimeExports.jsx("img", { src: photo, alt: "Selfie", className: "w-full h-full object-cover" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("video", { ref: videoRef, autoPlay: true, playsInline: true, muted: true, className: "w-full h-full object-cover mirror" }),
             !photo && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "absolute inset-0 flex items-center justify-center pointer-events-none", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "w-40 h-48 border-2 border-white/40 rounded-full" }) })
           ] }),
-          faceValidation && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: `p-3 rounded-xl text-sm ${faceValidation.detected ? "bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 text-emerald-700 dark:text-emerald-300" : "bg-red-50 dark:bg-red-950/30 border border-red-200 text-red-700 dark:text-red-300"}`, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex items-center gap-2", children: faceValidation.detected ? /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
-            "✅ Wajah terverifikasi (",
+          faceValidation && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: `p-3 rounded-xl text-sm ${faceValidation.detected ? "bg-blue-50 dark:bg-blue-950/30 border border-blue-200 text-blue-700 dark:text-blue-300" : "bg-red-50 dark:bg-red-950/30 border border-red-200 text-red-700 dark:text-red-300"}`, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex items-center gap-2", children: faceValidation.detected ? /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            "👁️ Wajah terdeteksi (",
             faceValidation.confidence,
             "%)"
           ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
             "❌ ",
             faceValidation.message
           ] }) }) }),
+          faceStatusKnown === false && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "p-3 rounded-xl text-sm bg-amber-50 dark:bg-amber-950/30 border border-amber-200 text-amber-700 dark:text-amber-300", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex items-center gap-2", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            "⚠️ Belum ada template wajah aktif untuk akun ini.",
+            " ",
+            session?.employeeId ? /* @__PURE__ */ jsxRuntimeExports.jsx("a", { href: "#/face-enrollment", className: "underline font-medium", children: "Daftar di menu Face ID" }) : "Hubungi admin HR."
+          ] }) }) }),
+          faceResult && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: `p-3 rounded-xl text-sm ${faceResult.success && faceResult.code === "VERIFIED" ? "bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 text-emerald-700 dark:text-emerald-300" : "bg-red-50 dark:bg-red-950/30 border border-red-200 text-red-700 dark:text-red-300"}`, children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex items-center gap-2", children: faceResult.success && faceResult.code === "VERIFIED" ? /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            "✅ Wajah terverifikasi (",
+            faceResult.similarityPercent,
+            "%)"
+          ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: faceResult.message }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs opacity-70 mt-1", children: [
+              "Kode: ",
+              faceResult.code
+            ] }),
+            faceResult.code === "FACE_NOT_REGISTERED" && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs mt-1 font-medium", children: [
+              "Buka menu ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Face ID" }),
+              " untuk mendaftarkan wajah Anda."
+            ] })
+          ] }) }) }),
+          verifyingFace && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "p-3 rounded-xl text-sm bg-blue-50 dark:bg-blue-950/30 border border-blue-200 text-blue-700 dark:text-blue-300", children: "⏳ Memverifikasi wajah dengan server..." }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex gap-2 justify-center", children: !photo ? /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { variant: "secondary", onClick: capturePhoto, size: "lg", className: "w-full", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(Camera, { className: "h-5 w-5" }),
             " Ambil Foto & Verifikasi Wajah"
@@ -43233,7 +43149,7 @@ function AttendancePage() {
             /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "Ambil foto untuk memverifikasi identitas Anda" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-slate-400", children: "Pastikan wajah terlihat jelas dan pencahayaan cukup" })
           ] }),
-          photo && !faceVerified && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-center text-sm text-amber-600", children: /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "Wajah tidak terverifikasi. Silakan ambil foto ulang dengan posisi yang lebih baik." }) })
+          photo && faceValidation?.detected && faceResult && faceResult.code !== "VERIFIED" && !verifyingFace && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-center text-sm text-amber-600", children: /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "Ambil foto ulang atau daftarkan wajah di menu Face ID jika masalah berlanjut." }) })
         ] })
       }
     )
@@ -54285,7 +54201,7 @@ function le() {
   var h3 = l2.getContext("2d");
   h3.fillStyle = "#fff", h3.fillRect(0, 0, l2.width, l2.height);
   var f2 = { ignoreMouse: true, ignoreAnimation: true, ignoreDimensions: true }, d2 = this;
-  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-OylYzVNz.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
+  return (i.canvg ? Promise.resolve(i.canvg) : __vitePreload(() => import("./index.es-CbRabW4i.js"), true ? [] : void 0, import.meta.url)).catch(function(t3) {
     return Promise.reject(new Error("Could not load canvg: " + t3));
   }).then(function(t3) {
     return t3.default ? t3.default : t3;
@@ -56937,7 +56853,7 @@ function PayrollPage() {
     );
     toast.success("Payroll diexport");
   };
-  const generateEncryptedPDF = (p2, password) => {
+  const generateEncryptedPDF = (p2, _password) => {
     const emp = db.getEmployeeById(p2.employeeId);
     const settings2 = db.getSettings();
     const doc = new E();
@@ -58096,7 +58012,7 @@ function AccessPage() {
             ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-slate-500 mt-1", children: [
               "Status: ",
-              selectedEmployee.faceRegistered ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-emerald-600 font-medium", children: "✓ Terdaftar" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-red-600 font-medium", children: "✗ Belum Terdaftar" })
+              selectedEmployee.faceRegistered ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-emerald-600 font-medium", children: "âœ“ Terdaftar" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-red-600 font-medium", children: "âœ— Belum Terdaftar" })
             ] })
           ] }),
           !viewingFace ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-3", children: [
@@ -58125,7 +58041,7 @@ function AccessPage() {
             ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "p-4 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800", children: /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-red-800 dark:text-red-300", children: "Karyawan ini belum melakukan pendaftaran wajah (Face Enrollment)." }) })
           ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-3", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-amber-800 dark:text-amber-300 mb-2", children: "⚠️ Face Descriptor Lengkap (128 Fitur)" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium text-amber-800 dark:text-amber-300 mb-2", children: "âš ï¸ Face Descriptor Lengkap (128 Fitur)" }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-amber-700 dark:text-amber-400", children: "Jangan bagikan data ini kepada pihak yang tidak berwenang. Data ini digunakan untuk verifikasi identitas karyawan." })
             ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "p-4 rounded-xl bg-slate-100 dark:bg-slate-800", children: [
@@ -58660,7 +58576,27 @@ function FaceEnrollmentPage() {
   const [loading, setLoading] = reactExports.useState(true);
   const [updating, setUpdating] = reactExports.useState(false);
   const [cameraStarting, setCameraStarting] = reactExports.useState(false);
-  const employee = (session?.employeeId ? db.getEmployeeById(session.employeeId) : null) || (session?.email ? db.getEmployees().find((e) => e.email.toLowerCase() === session.email.toLowerCase()) : null);
+  const [activeTemplateId, setActiveTemplateId] = reactExports.useState(null);
+  const [diagnosis, setDiagnosis] = reactExports.useState(null);
+  const [diagnosing, setDiagnosing] = reactExports.useState(false);
+  const runDiagnosis = reactExports.useCallback(async () => {
+    setDiagnosing(true);
+    try {
+      const res = await diagnoseFace();
+      if (!res.ok || !res.data) {
+        toast.error(res.message || "Diagnosa gagal.");
+        setDiagnosis(null);
+      } else {
+        setDiagnosis(res.data);
+        console.log(
+          `[FACE DEBUG] diagnose | healthy=${res.data.healthy} | template=${res.data.activeTemplateId || "-"} | length=${res.data.descriptorLength ?? "-"} | model=${res.data.expectedModel ?? "-"}`
+        );
+      }
+    } finally {
+      setDiagnosing(false);
+    }
+  }, [toast]);
+  const displayName = session?.name || "Pengguna";
   const releaseCamera = reactExports.useCallback(() => {
     try {
       if (streamRef.current) {
@@ -58706,9 +58642,21 @@ function FaceEnrollmentPage() {
     };
   }, []);
   const checkEnrollmentStatus = async () => {
-    const res = await getFaceEnrollmentStatus();
-    if (res.success && res.data) {
-      setEnrolled(res.data.enrolled);
+    const res = await getFaceStatus();
+    if (res.code === "UNKNOWN_ACTION") {
+      toast.error(LEGACY_BACKEND_MESSAGE);
+      setEnrolled(false);
+      setActiveTemplateId(null);
+    } else if (res.enrolled) {
+      setEnrolled(true);
+      setActiveTemplateId(res.faceTemplateId || null);
+    } else if (res.code === "INVALID_TEMPLATE" || res.modelCompatible === false) {
+      toast.error("Data wajah terdaftar tidak kompatibel. Silakan daftarkan ulang wajah Anda.");
+      setEnrolled(false);
+      setActiveTemplateId(null);
+    } else {
+      setEnrolled(false);
+      setActiveTemplateId(null);
     }
     setLoading(false);
   };
@@ -58779,16 +58727,35 @@ function FaceEnrollmentPage() {
       toast.error("Ambil foto terlebih dahulu");
       return;
     }
+    if (enrolling) return;
     setEnrolling(true);
-    const res = await enrollFace(validation.descriptor);
-    setEnrolling(false);
-    if (res.success) {
-      toast.success("Wajah berhasil didaftarkan!");
-      setEnrolled(true);
-      setUpdating(false);
-      stopCamera();
-    } else {
-      toast.error(res.message);
+    try {
+      const result = await enrollFace(validation.descriptor);
+      if (result.success) {
+        setEnrolled(true);
+        setActiveTemplateId(result.faceTemplateId || null);
+        setUpdating(false);
+        stopCamera();
+        console.log(
+          `[FACE DEBUG] enroll OK | template=${result.faceTemplateId ?? "-"} | length=${result.descriptorLength ?? "-"} | readBack=${result.readBackValidated} | requestId=${result.requestId ?? "-"}`
+        );
+        await Swal.fire({
+          icon: "success",
+          title: "Wajah Berhasil Didaftarkan",
+          html: `<p>Template Face ID Anda tersimpan dan <b>sudah diverifikasi dapat dibaca kembali</b> dari database.</p><p style="font-size:0.85em;color:#64748b">Template ID: <code>${result.faceTemplateId ?? "-"}</code></p>`,
+          confirmButtonColor: "#0D47A1"
+        });
+        runDiagnosis();
+      } else {
+        await Swal.fire({
+          icon: "error",
+          title: "Registrasi Gagal",
+          text: result.message,
+          confirmButtonColor: "#0D47A1"
+        });
+      }
+    } finally {
+      setEnrolling(false);
     }
   };
   const handleUpdateCancel = () => {
@@ -58798,7 +58765,7 @@ function FaceEnrollmentPage() {
   const handleReset = async () => {
     const result = await Swal.fire({
       title: "Reset Pendaftaran Wajah?",
-      text: "Anda akan menghapus data wajah yang terdaftar dan harus mendaftar ulang.",
+      text: "Template wajah Anda akan dinonaktifkan di server dan harus mendaftar ulang.",
       icon: "warning",
       showCancelButton: true,
       confirmButtonColor: "#D32F2F",
@@ -58806,17 +58773,20 @@ function FaceEnrollmentPage() {
       cancelButtonText: "Batal"
     });
     if (!result.isConfirmed) return;
-    if (employee) {
-      const employees2 = db.getEmployees();
-      const idx = employees2.findIndex((e) => e.id === employee.id);
-      if (idx >= 0) {
-        employees2[idx].faceDescriptor = void 0;
-        employees2[idx].faceRegistered = false;
-        db.setEmployees(employees2);
+    setUpdating(true);
+    try {
+      const res = await deactivateFace();
+      if (res.success) {
         setEnrolled(false);
+        setActiveTemplateId(null);
         setUpdating(false);
-        toast.success("Pendaftaran wajah berhasil direset");
+        toast.success("Pendaftaran wajah berhasil direset di server");
+        runDiagnosis();
+      } else {
+        toast.error(res.message);
       }
+    } finally {
+      setUpdating(false);
     }
   };
   const handleStartEnrollment = () => {
@@ -58842,11 +58812,11 @@ function FaceEnrollmentPage() {
         /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-slate-600 dark:text-slate-400", children: "Face recognition memastikan bahwa hanya Anda yang dapat melakukan absensi. Wajah Anda akan diverifikasi setiap kali check-in/check-out untuk mencegah fraud." })
       ] })
     ] }) }) }),
-    employee && /* @__PURE__ */ jsxRuntimeExports.jsx(Card, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(CardBody, { className: "pt-5", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-4", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center", children: employee.photo ? /* @__PURE__ */ jsxRuntimeExports.jsx("img", { src: employee.photo, alt: employee.fullName, className: "h-16 w-16 rounded-full object-cover" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(User, { className: "h-8 w-8 text-primary" }) }),
+    session && /* @__PURE__ */ jsxRuntimeExports.jsx(Card, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(CardBody, { className: "pt-5", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-4", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center", children: /* @__PURE__ */ jsxRuntimeExports.jsx(User, { className: "h-8 w-8 text-primary" }) }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold text-slate-800 dark:text-white", children: employee.fullName }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-slate-500", children: employee.employeeId }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "font-semibold text-slate-800 dark:text-white", children: displayName }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-slate-500", children: session.email }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(Badge, { status: enrolled ? "Active" : "Resigned", className: "mt-1", children: enrolled ? "✓ Wajah Terdaftar" : "Belum Terdaftar" })
       ] })
     ] }) }) }),
@@ -59015,7 +58985,11 @@ function FaceEnrollmentPage() {
     enrolled && !updating && /* @__PURE__ */ jsxRuntimeExports.jsx(Card, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(CardBody, { className: "pt-5", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-center py-6", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(CircleCheck, { className: "h-16 w-16 text-emerald-500 mx-auto mb-4" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "text-lg font-semibold text-slate-800 dark:text-white mb-2", children: "Wajah Sudah Terdaftar" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-slate-500 mb-4", children: "Wajah Anda telah terdaftar dan siap untuk verifikasi absensi" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-slate-500 mb-1", children: "Wajah Anda telah terdaftar di server dan siap untuk verifikasi absensi" }),
+      activeTemplateId && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-slate-400 mb-4 font-mono", children: [
+        "Template ID: ",
+        activeTemplateId
+      ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2 justify-center", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs(Button, { variant: "outline", onClick: handleStartEnrollment, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx(RefreshCw, { className: "h-4 w-4" }),
@@ -59027,6 +59001,65 @@ function FaceEnrollmentPage() {
         ] })
       ] })
     ] }) }) }),
+    !cameraActive && !updating && /* @__PURE__ */ jsxRuntimeExports.jsxs(Card, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(CardHeader, { children: /* @__PURE__ */ jsxRuntimeExports.jsxs(CardTitle, { className: "text-base flex items-center gap-2", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Stethoscope, { className: "h-4 w-4" }),
+        " Diagnosa Database Face ID"
+      ] }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(CardBody, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-slate-500 mb-3", children: "Periksa apakah layer database Face ID sehat untuk akun Anda (template ada, aktif, descriptor valid, model kompatibel) — sebelum menguji kamera." }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button, { variant: "secondary", onClick: runDiagnosis, loading: diagnosing, children: "Jalankan Diagnosa" }),
+        diagnosis && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: cn(
+          "mt-4 p-4 rounded-xl border text-sm",
+          diagnosis.healthy ? "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30" : "bg-red-50 border-red-200 dark:bg-red-950/30"
+        ), children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: cn(
+            "font-semibold mb-2",
+            diagnosis.healthy ? "text-emerald-800 dark:text-emerald-300" : "text-red-800 dark:text-red-300"
+          ), children: diagnosis.summary }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("ul", { className: "space-y-1 text-xs", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+              diagnosis.checks.userFound ? "✅" : "❌",
+              " User ditemukan"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+              diagnosis.checks.employeeFound ? "✅" : "⚠️",
+              " Data karyawan terhubung"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+              diagnosis.checks.templateFound ? "✅" : "❌",
+              " Template wajah ditemukan (",
+              diagnosis.templateCount ?? 0,
+              ")"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+              diagnosis.checks.templateActive ? "✅" : "❌",
+              " Template berstatus ACTIVE"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+              diagnosis.checks.descriptorValid ? "✅" : "❌",
+              " Descriptor valid"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+              diagnosis.checks.modelCompatible ? "✅" : "❌",
+              " Model kompatibel (",
+              diagnosis.expectedModel,
+              " v",
+              diagnosis.expectedModelVersion,
+              ")"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+              diagnosis.checks.readBackSuccess ? "✅" : "❌",
+              " Read-back berhasil"
+            ] })
+          ] }),
+          diagnosis.activeTemplateId && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "text-xs text-slate-400 mt-2 font-mono", children: [
+            "ID: ",
+            diagnosis.activeTemplateId
+          ] })
+        ] })
+      ] })
+    ] }),
     !cameraActive && !updating && /* @__PURE__ */ jsxRuntimeExports.jsxs(Card, { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(CardHeader, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(CardTitle, { className: "text-base", children: "Petunjuk Pendaftaran" }) }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(CardBody, { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("ul", { className: "space-y-2 text-sm text-slate-600 dark:text-slate-400", children: [
@@ -59140,6 +59173,7 @@ function AppRoutes() {
 function App() {
   return /* @__PURE__ */ jsxRuntimeExports.jsx(HashRouter, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(ThemeProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(ToastProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(AuthProvider, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(AppRoutes, {}) }) }) }) });
 }
+console.log("[APP VERSION]", "2026-08-24.mt6kz45l");
 clientExports.createRoot(document.getElementById("root")).render(
   /* @__PURE__ */ jsxRuntimeExports.jsx(reactExports.StrictMode, { children: /* @__PURE__ */ jsxRuntimeExports.jsx(App, {}) })
 );

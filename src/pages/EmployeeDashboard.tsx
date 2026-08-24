@@ -1,23 +1,19 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Clock,
   CalendarCheck,
-  CalendarOff,
   ClipboardList,
   ChevronRight,
   Megaphone,
   User,
   LogOut,
-  Bell,
   MapPin,
   Camera,
   CheckCircle2,
-  XCircle,
-  AlertCircle,
 } from 'lucide-react';
-import { getDashboard, checkIn, checkOut, getCurrentSession } from '../services/api';
-import type { DashboardStats, Attendance } from '../types';
+import { getDashboard, checkIn, checkOut } from '../services/api';
+import type { DashboardStats } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { formatDate, formatTime, todayStr, getCurrentPosition } from '../lib/utils';
@@ -30,7 +26,7 @@ export function EmployeeDashboard() {
   const toast = useToast();
   const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
   const [photo, setPhoto] = useState<string | null>(null);
@@ -184,12 +180,12 @@ export function EmployeeDashboard() {
         <div className="flex items-center justify-center gap-4 mt-2">
           <div className="text-center">
             <p className="text-xs text-white/60">Check In</p>
-            <p className="font-semibold">{formatTime(todayAtt?.checkIn) || '—'}</p>
+            <p className="font-semibold">{formatTime(todayAtt?.checkIn) || 'â€”'}</p>
           </div>
           <div className="h-8 w-px bg-white/20" />
           <div className="text-center">
             <p className="text-xs text-white/60">Check Out</p>
-            <p className="font-semibold">{formatTime(todayAtt?.checkOut) || '—'}</p>
+            <p className="font-semibold">{formatTime(todayAtt?.checkOut) || 'â€”'}</p>
           </div>
           <div className="h-8 w-px bg-white/20" />
           <div className="text-center">
