@@ -51,11 +51,6 @@ function handleRequest(e, method) {
     var action = params.action || '';
     var token = params.token || params.apiToken || '';
 
-    // Rate limit check
-    if (!checkRateLimit(getClientIp(e))) {
-      return jsonResponse({ success: false, message: 'Rate limit exceeded. Coba lagi nanti.' });
-    }
-
     // Opportunistic cleanup of expired sessions
     cleanupExpiredSessions();
 
@@ -78,6 +73,17 @@ function handleRequest(e, method) {
         return jsonResponse({ success: false, code: sessCode, message: sessMsg });
       }
       session = v.session;
+    }
+
+    // Rate limit PER USER (bukan global). CacheService tidak menyediakan IP,
+    // jadi kunci per userId (action ber-session) / per clientId (public).
+    // health dikecualikan agar monitor/curl tidak ikut terhitung.
+    if (action !== 'health') {
+      var rateKey = session ? 'u_' + String(session.userId)
+        : 'anon_' + String(params.clientId || 'web');
+      if (!checkRateLimit(rateKey)) {
+        return jsonResponse({ success: false, message: 'Rate limit exceeded. Coba lagi nanti.' });
+      }
     }
 
     // ========== PASTIKAN employeeId UNTUK ACTION YANG MEMBUTUHKAN ==========

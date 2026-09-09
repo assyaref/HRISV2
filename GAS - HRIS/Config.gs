@@ -20,7 +20,7 @@ var CONFIG = {
     return stored || 'hris-lite-CHANGE-ME-IN-PRODUCTION';
   },
   SESSION_HOURS: 24,
-  RATE_LIMIT_PER_MINUTE: 60,
+  RATE_LIMIT_PER_MINUTE: 300,
   COMPANY_NAME: 'HRIS Lite Enterprise',
   WORK_START: '08:00',
   WORK_END: '17:00',
