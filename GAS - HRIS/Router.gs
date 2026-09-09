@@ -209,6 +209,9 @@ function handleRequest(e, method) {
       case 'generatePayroll':
         result = PayrollService.generate(params.period, session);
         break;
+      case 'sendPayslip':
+        result = PayrollService.send(params.id, session);
+        break;
 
       // Announcement
       case 'announcement':
@@ -283,7 +286,7 @@ function handleRequest(e, method) {
         result = UploadService.uploadPhoto(params.base64, params.filename, params.mimeType);
         break;
       case 'uploadPayslip':
-        result = UploadService.uploadPayslip(params.base64, params.filename, params.employeeId, params.period);
+        result = UploadService.uploadPayslip(params.base64, params.filename, params.employeeId, params.period, params.payrollId);
         break;
 
       // Report
@@ -348,7 +351,7 @@ function initAllSheets() {
     ATTENDANCE: ['id', 'employeeId', 'date', 'checkIn', 'checkOut', 'checkInLat', 'checkInLng', 'checkOutLat', 'checkOutLng', 'checkInPhoto', 'checkOutPhoto', 'status', 'workHours', 'lateMinutes', 'notes', 'createdAt', 'faceTemplateId', 'faceSimilarity'],
     LEAVE: ['id', 'employeeId', 'leaveType', 'startDate', 'endDate', 'days', 'reason', 'status', 'managerNote', 'hrNote', 'approvedByManager', 'approvedByHR', 'createdAt', 'updatedAt'],
     PERMISSION: ['id', 'employeeId', 'type', 'date', 'startTime', 'endTime', 'reason', 'status', 'approvedBy', 'note', 'createdAt'],
-    PAYROLL: ['id', 'employeeId', 'period', 'basicSalary', 'allowance', 'overtime', 'deduction', 'bpjs', 'pph21', 'netSalary', 'status', 'generatedAt', 'paidAt', 'notes'],
+    PAYROLL: ['id', 'employeeId', 'period', 'basicSalary', 'allowance', 'overtime', 'deduction', 'bpjs', 'pph21', 'netSalary', 'status', 'generatedAt', 'paidAt', 'notes', 'slipFileId', 'slipUrl', 'slipSentAt'],
     DEPARTMENT: ['id', 'code', 'name', 'description', 'headId', 'isActive', 'createdAt'],
     DIVISION: ['id', 'code', 'name', 'departmentId', 'description', 'isActive', 'createdAt'],
     POSITION: ['id', 'code', 'name', 'departmentId', 'level', 'description', 'isActive', 'createdAt'],

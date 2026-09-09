@@ -10,6 +10,8 @@ export type PermissionType = 'Izin' | 'Sakit' | 'Dinas' | 'WFH';
 
 export type PermissionStatus = 'Pending' | 'Approved' | 'Rejected';
 
+export type PayrollStatus = 'Draft' | 'Slip Tersedia' | 'Terkirim';
+
 export interface User {
   id: string;
   email: string;
@@ -141,7 +143,11 @@ export interface Payroll {
   bpjs: number;
   pph21: number;
   netSalary: number;
-  status: 'Draft' | 'Generated' | 'Paid';
+  status: PayrollStatus;
+  /** File slip terenkripsi yg tersimpan di Google Drive (upload berhasil). */
+  slipFileId?: string;
+  slipUrl?: string;
+  slipSentAt?: string;
   generatedAt?: string;
   paidAt?: string;
   notes?: string;

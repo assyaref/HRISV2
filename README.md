@@ -25,3 +25,27 @@ Actions → Variables). Workflow sudah meneruskannya ke proses build.
 
 Jangan menyimpan kata sandi, spreadsheet ID privat, atau token admin pada
 frontend/GitHub Pages karena seluruh aset situs dapat dibaca publik.
+
+## Payroll — slip PDF terenkripsi otomatis
+
+Modul **Payroll** kini mengamankan slip gaji dengan enkripsi PDF sungguhan:
+
+- Password slip: `{NIK}{DD}{MM}{YYYY}` dari tanggal lahir karyawan
+  (contoh: NIK `12345`, lahir `15-08-1995` → `1234515081995`).
+- Enkripsi dilakukan **di browser** (`@pdfsmaller/pdf-encrypt-lite`,
+  RC4 128-bit / Standard Security Handler) sebelum file dikirim —
+  jsPDF/pdf-lib tidak bisa membuat PDF terkunci.
+- Alur status: `Draft` → `Slip Tersedia` (upload slip terenkripsi ke Google Drive)
+  → `Terkirim` (aksi Kirim Slip, simulasi).
+- Aksi baru: upload slip (auto-encrypt), kirim slip, unduh slip dari Drive.
+
+### Deploy ulang backend GAS (wajib setelah perubahan ini)
+
+1. Buka `GAS - HRIS` dengan [clasp](https://developers.google.com/apps-script/guides/clasp) atau tempel manual ke editor Apps Script.
+2. Push semua file, lalu **Deploy → Manage deployments → Edit → Version baru**.
+3. Salin URL `/exec` yang baru ke repository variable `VITE_GAS_API_URL`
+   (Settings → Secrets and variables → Actions → Variables) dan ke `.env` lokal.
+4. Kolom `slipFileId`, `slipUrl`, `slipSentAt` di sheet **PAYROLL** ditambahkan
+   otomatis saat halaman Payroll dibuka / payroll digenerate (tidak perlu
+   migrasi manual).
+

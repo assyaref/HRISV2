@@ -109,6 +109,8 @@ export function statusColor(status: string): string {
     Draft: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
     Generated: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
     Paid: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+    'Slip Tersedia': 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
+    Terkirim: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
     High: 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300',
     Urgent: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
     Normal: 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',

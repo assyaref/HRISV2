@@ -257,9 +257,12 @@ export const payrolls: Payroll[] = employees
         bpjs,
         pph21,
         netSalary: net,
-        status: 'Paid' as const,
+        status: 'Terkirim' as const,
         generatedAt: daysAgo(20),
         paidAt: daysAgo(15),
+        slipSentAt: daysAgo(15),
+        slipUrl: 'https://drive.google.com/uc?export=download&id=mock-slip-id',
+        slipFileId: 'mock-slip-id',
       },
       {
         id: `pay-${e.id}-${currentPeriod}`,
@@ -272,7 +275,7 @@ export const payrolls: Payroll[] = employees
         bpjs,
         pph21,
         netSalary: e.salary + allowance + Math.round(Math.random() * 400000) - Math.round(Math.random() * 100000) - bpjs - pph21,
-        status: 'Generated' as const,
+        status: 'Draft' as const,
         generatedAt: daysAgo(2),
       },
     ];

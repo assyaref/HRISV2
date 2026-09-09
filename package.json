@@ -10,6 +10,7 @@
     "deploy": "npm run build && git add dist -f && git commit -m 'deploy' && git subtree push --prefix dist origin gh-pages"
   },
   "dependencies": {
+    "@pdfsmaller/pdf-encrypt-lite": "^1.2.0",
     "chart.js": "^4.5.1",
     "clsx": "2.1.1",
     "date-fns": "^4.4.0",

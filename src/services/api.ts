@@ -1018,7 +1018,7 @@ export async function generatePayroll(period: string): Promise<ApiResponse<Payro
         bpjs,
         pph21,
         netSalary,
-        status: 'Generated',
+        status: 'Draft',
         generatedAt: new Date().toISOString(),
       };
       generated.push(pay);
@@ -1043,6 +1043,34 @@ export async function updatePayroll(id: string, data: Partial<Payroll>): Promise
   list[idx] = updated;
   db.setPayrolls(list);
   return ok(list[idx], 'Payroll diperbarui');
+}
+
+/**
+ * Kirim slip gaji (simulasi distribusi). Status berubah menjadi "Terkirim".
+ * Di GAS, guard dilakukan server-side (slip harus sudah diupload).
+ */
+export async function sendPayslip(id: string): Promise<ApiResponse<Payroll>> {
+  try {
+    return await callAPI<Payroll>('sendPayslip', { id });
+  } catch {
+    await delay(400);
+    requireRole(['Administrator', 'HR']);
+    const list = db.getPayrolls();
+    const idx = list.findIndex((p) => p.id === id);
+    if (idx < 0) return fail('Payroll tidak ditemukan') as ApiResponse<Payroll>;
+    const current = list[idx];
+    if (!current.slipUrl && String(current.status) !== 'Slip Tersedia') {
+      return fail('Upload slip gaji terlebih dahulu!') as ApiResponse<Payroll>;
+    }
+    const updated: Payroll = {
+      ...current,
+      status: 'Terkirim',
+      slipSentAt: new Date().toISOString(),
+    };
+    list[idx] = updated;
+    db.setPayrolls(list);
+    return ok(updated, 'Slip gaji berhasil dikirim (simulasi)');
+  }
 }
 
 // ========== ANNOUNCEMENT ==========
@@ -1331,10 +1359,22 @@ export async function uploadPhoto(base64: string, filename: string, mimeType: st
   }
 }
 
-export async function uploadPayslip(base64: string, filename: string, employeeId: string, period: string): Promise<ApiResponse<{ url: string }>> {
+export async function uploadPayslip(
+  base64: string,
+  filename: string,
+  employeeId: string,
+  period: string,
+  payrollId?: string
+): Promise<ApiResponse<{ url: string; fileId?: string }>> {
   try {
-    return await callAPI<{ url: string }>('uploadPayslip', { base64, filename, employeeId, period });
+    return await callAPI<{ url: string; fileId?: string }>('uploadPayslip', {
+      base64,
+      filename,
+      employeeId,
+      period,
+      payrollId: payrollId || '',
+    });
   } catch {
-    return fail('Upload slip gaji tidak tersedia di mode lokal');
+    return fail('Upload slip gaji tidak tersedia di mode lokal. Aktifkan backend GAS terlebih dahulu.');
   }
 }

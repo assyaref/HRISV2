@@ -20,22 +20,37 @@ var UploadService = {
     }
   },
 
-  uploadPayslip: function (base64Data, filename, employeeId, period) {
+  uploadPayslip: function (base64Data, filename, employeeId, period, payrollId) {
     try {
+      ensurePayrollSlipColumns();
       var folderId = '1JRQt7gzY5wrIKLPaLZ6Ma3q1qJyjZoYc';
       var folder = DriveApp.getFolderById(folderId);
-      
+
       var yearMonth = period;
       var payrollFolder = folder.createFolder(yearMonth);
       var employeeFolder = payrollFolder.createFolder(employeeId);
-      
+
       var blob = Utilities.newBlob(Utilities.base64Decode(base64Data.replace(/^data:[^;]+;base64,/, '')), 'application/pdf', filename);
       var file = employeeFolder.createFile(blob);
       file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      
+
+      var viewUrl = 'https://drive.google.com/uc?export=view&id=' + file.getId();
+      var downloadUrl = 'https://drive.google.com/uc?export=download&id=' + file.getId();
+      var payrollUpdated = false;
+      if (payrollId) {
+        payrollUpdated = updateObject(CONFIG.SHEETS.PAYROLL, payrollId, {
+          status: 'Slip Tersedia',
+          slipUrl: downloadUrl,
+          slipFileId: file.getId(),
+          slipSentAt: ''
+        });
+      }
+
       return ok({
-        url: 'https://drive.google.com/uc?export=view&id=' + file.getId(),
+        url: viewUrl,
+        downloadUrl: downloadUrl,
         fileId: file.getId(),
+        payrollUpdated: payrollUpdated,
         folderPath: yearMonth + '/' + employeeId + '/' + filename
       });
     } catch (e) {
