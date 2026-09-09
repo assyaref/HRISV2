@@ -52,7 +52,33 @@ var PayrollService = {
     if (params.period) list = list.filter(function (p) { return p.period === params.period; });
     if (params.employeeId) list = list.filter(function (p) { return p.employeeId === params.employeeId; });
     list.sort(function (a, b) { return b.period > a.period ? 1 : -1; });
-    return ok(list);
+
+    // Tempel info karyawan (nama/NIK/DOB/email) supaya nama selalu tampil
+    // tanpa bergantung request getEmployees terpisah di frontend.
+    var employees = sheetToObjects(CONFIG.SHEETS.EMPLOYEE);
+    var empMap = {};
+    employees.forEach(function (e) {
+      if (e.id) empMap[String(e.id)] = e;
+      if (e.employeeId) empMap[String(e.employeeId)] = e;
+    });
+
+    var enriched = [];
+    list.forEach(function (p) {
+      var e = empMap[String(p.employeeId)] || null;
+      var x = {};
+      for (var k in p) {
+        if (p.hasOwnProperty(k)) x[k] = p[k];
+      }
+      if (e) {
+        x.employeeName = e.fullName;
+        x.employeeCode = e.employeeId;
+        x.employeeNik = e.nik;
+        x.employeeBirthDate = e.birthDate;
+        x.employeeEmail = e.email;
+      }
+      enriched.push(x);
+    });
+    return ok(enriched);
   },
 
   /**
@@ -84,6 +110,11 @@ var PayrollService = {
     var cId = empHeaders.indexOf('id');
     var cStatus = empHeaders.indexOf('employmentStatus');
     var cSalary = empHeaders.indexOf('salary');
+    var cCode = empHeaders.indexOf('employeeId');
+    var cName = empHeaders.indexOf('fullName');
+    var cNik = empHeaders.indexOf('nik');
+    var cBirth = empHeaders.indexOf('birthDate');
+    var cEmail = empHeaders.indexOf('email');
 
     var generated = [];
     var newRows = [];
@@ -131,6 +162,18 @@ var PayrollService = {
         return v;
       });
       newRows.push(row);
+
+      // Info karyawan utk respons (nama dsb) — tidak disimpan ke kolom sheet.
+      var empName = cName >= 0 ? String(empRow[cName]) : '';
+      var empCode = cCode >= 0 ? String(empRow[cCode]) : '';
+      var empNik = cNik >= 0 ? String(empRow[cNik]) : '';
+      var empBirth = cBirth >= 0 ? String(empRow[cBirth]) : '';
+      var empEmail = cEmail >= 0 ? String(empRow[cEmail]) : '';
+      pay.employeeName = empName;
+      pay.employeeCode = empCode;
+      pay.employeeNik = empNik;
+      pay.employeeBirthDate = empBirth;
+      pay.employeeEmail = empEmail;
       generated.push(pay);
     }
 

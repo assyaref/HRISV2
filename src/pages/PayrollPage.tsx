@@ -98,6 +98,37 @@ export function PayrollPage() {
     [empIndex]
   );
 
+  /** Resolve karyawan utk baris payroll: dari pool master, fallback ke data
+   *  bawaan payroll (employeeName/Code/NIK/DOB/Email dari backend). */
+  const empOf = useCallback(
+    (p: Payroll): Employee | undefined => {
+      const found = findEmp(p.employeeId);
+      if (found) return found;
+      if (!p.employeeName) return undefined;
+      return {
+        id: p.employeeId,
+        employeeId: p.employeeCode || p.employeeId,
+        nik: p.employeeNik || '',
+        fullName: p.employeeName,
+        gender: 'Male',
+        birthDate: p.employeeBirthDate || '',
+        religion: '',
+        address: '',
+        phone: '',
+        email: p.employeeEmail || '',
+        departmentId: '',
+        divisionId: '',
+        positionId: '',
+        joinDate: '',
+        employmentStatus: 'Active',
+        salary: 0,
+        createdAt: '',
+        updatedAt: '',
+      };
+    },
+    [findEmp]
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     const filters: { period?: string; employeeId?: string } = { period };
@@ -144,8 +175,8 @@ export function PayrollPage() {
     exportToExcel(
       payrolls.map((p) => ({
         Periode: p.period,
-        Karyawan: findEmp(p.employeeId)?.fullName,
-        NIP: findEmp(p.employeeId)?.employeeId,
+        Karyawan: empOf(p)?.fullName,
+        NIP: empOf(p)?.employeeId,
         'Gaji Pokok': p.basicSalary,
         Tunjangan: p.allowance,
         Lembur: p.overtime,
@@ -167,7 +198,7 @@ export function PayrollPage() {
 
   /** Generate slip PDF lalu ENKRIPSI sungguhan di browser sebelum diunduh. */
   const handleSlip = async (p: Payroll) => {
-    const emp = findEmp(p.employeeId);
+    const emp = empOf(p);
     const password = buildSlipPassword(emp);
     if (!password) {
       toast.error('Data NIK & tanggal lahir karyawan wajib diisi untuk membuat password slip.');
@@ -200,7 +231,7 @@ export function PayrollPage() {
       return;
     }
 
-    const emp = findEmp(selectedPayroll.employeeId);
+    const emp = empOf(selectedPayroll);
     const password = buildSlipPassword(emp);
     if (!password) {
       toast.error('Data NIK & tanggal lahir karyawan wajib diisi untuk mengenkripsi slip.');
@@ -249,7 +280,7 @@ export function PayrollPage() {
     try {
       const res = await api.sendPayslip(p.id);
       if (res.success) {
-        const emp = findEmp(p.employeeId);
+        const emp = empOf(p);
         const password = buildSlipPassword(emp);
         const email = emp?.email ? ` ke ${emp.email}` : '';
         toast.success(
@@ -290,7 +321,7 @@ export function PayrollPage() {
       key: 'employeeId',
       label: 'Karyawan',
       render: (row) => {
-        const emp = findEmp(row.employeeId);
+        const emp = empOf(row);
         return (
           <div>
             <p className="font-medium">{emp?.fullName || row.employeeId}</p>
@@ -336,7 +367,7 @@ export function PayrollPage() {
     return { value: val, label };
   });
 
-  const selectedEmp = selectedPayroll ? findEmp(selectedPayroll.employeeId) : undefined;
+  const selectedEmp = selectedPayroll ? empOf(selectedPayroll) : undefined;
   const selectedPassword = selectedPayroll ? buildSlipPassword(selectedEmp) : '';
 
   return (

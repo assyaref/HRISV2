@@ -148,6 +148,12 @@ export interface Payroll {
   slipFileId?: string;
   slipUrl?: string;
   slipSentAt?: string;
+  /** Info karyawan yang ditempel backend supaya nama tampil tanpa request tambahan. */
+  employeeName?: string;
+  employeeCode?: string;
+  employeeNik?: string;
+  employeeBirthDate?: string;
+  employeeEmail?: string;
   generatedAt?: string;
   paidAt?: string;
   notes?: string;
