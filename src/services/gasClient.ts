@@ -1,6 +1,6 @@
 /** Google Apps Script Web App transport. The URL is public by design. */
 export const GAS_API_URL = import.meta.env.VITE_GAS_API_URL ||
-  'https://script.google.com/macros/s/AKfycbwRwzGGNXT78sH9r0lWhOmRpAfOcVPxH8ALXHdGfM1QZWCUCuDEVXJVxJjnsc-KocfU0A/exec';
+  'https://script.google.com/macros/s/AKfycbzmx1akP2txv49TaAZpqrW4UqJnxzxHQ0f0LozSxk1xw3-DhbPuMJE7qqKOXenIx4klLw/exec';
 
 // Verifikasi sekali per load bahwa frontend menunjuk deployment GAS yang benar
 // (bukan deployment lama). Jangan log URL penuh berikut kredensial.

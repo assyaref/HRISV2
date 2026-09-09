@@ -30,7 +30,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          VITE_GAS_API_URL: ${{ vars.VITE_GAS_API_URL || 'https://script.google.com/macros/s/AKfycbyyLHD2TGa8jNvmUrvSlEVtbzgb-rOm7pzpwWZYoke--BILvksVsGDxvX96-ob3U71Sgw/exec' }}
+          VITE_GAS_API_URL: ${{ vars.VITE_GAS_API_URL || 'https://script.google.com/macros/s/AKfycbzmx1akP2txv49TaAZpqrW4UqJnxzxHQ0f0LozSxk1xw3-DhbPuMJE7qqKOXenIx4klLw/exec' }}
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
